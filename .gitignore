@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+
+__pycache__/
+.DS_Store
+.venv/
+.omx/
+
+outputs/
+logs/
+*.egg-info/
+.pytest_cache/
