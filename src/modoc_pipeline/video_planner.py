@@ -74,11 +74,21 @@ Veo for 9:16 video generation.
 Safety and content constraints:
 - Do not request real children, identifiable minors, hospital patients, or
   realistic depictions of distressed children.
-- Prefer abstract, illustrated, parent-friendly visuals, household objects,
-  simple clinic-safe environments, or animated educational metaphors.
+- Prefer bright, calm, parent-friendly educational visuals: clean illustrated
+  diagrams, household care objects, simple clinic-safe environments, and gentle
+  animated educational metaphors.
 - Do not add new medical advice beyond the script.
 - Avoid scary, graphic, invasive, or diagnosis-like visuals.
+- Avoid dark backgrounds, red X warnings, panic imagery, emergency rooms,
+  needles, realistic organs, and alarming icons unless the script explicitly
+  requires urgent care.
+- Do not ask Veo to generate readable text, numbers, calendars, labels, or UI
+  copy inside the image; rendered captions will carry the message.
+- Preserve medical uncertainty. Never rewrite "less likely" as "no", "never",
+  "definitely", or any other diagnosis-like certainty.
 - Keep each prompt concise enough for a video model.
+- Keep subtitle_text short, plain, and medically cautious. Each subtitle should
+  be one sentence or sentence fragment under 80 characters when possible.
 
 Return valid JSON only. Do not include Markdown fences.
 Use this exact top-level shape:

@@ -104,6 +104,37 @@ meant to measure repeated human work.
 
 ## Video automation workflow
 
+One-command generation is available for the normal path:
+
+```bash
+python3 -m modoc_pipeline run-all --input "Q&A Blog Contents List.xlsx" --row 3
+```
+
+For quick smoke tests that avoid generating every language and scene:
+
+```bash
+python3 -m modoc_pipeline run-all \
+  --input "Q&A Blog Contents List.xlsx" \
+  --row 3 \
+  --languages english \
+  --max-clips 1
+```
+
+`run-all` performs:
+
+```text
+generate -> plan-video -> veo-gemini -> render
+```
+
+The final MP4 files are written under:
+
+```text
+outputs/<run_id>/videos/
+```
+
+The individual stage commands remain useful for debugging or regenerating one
+piece of a run.
+
 After `generate` creates an `outputs/<run_id>/` folder, create a video plan:
 
 ```bash
