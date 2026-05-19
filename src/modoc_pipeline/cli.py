@@ -20,6 +20,16 @@ from .artifacts import (
 )
 from .excel_source import load_qna_sources
 from .gemini_client import GeminiResponseParseError, generate_short_form_package
+from .io_utils import read_json, write_json, write_text
+from .renderer import render_language_videos
+from .veo_client import (
+    ensure_vertex_prerequisites,
+    generate_gemini_veo_clips,
+    generate_veo_clips,
+    load_gemini_veo_config,
+    load_vertex_config,
+)
+from .video_planner import generate_video_plan
 
 
 DEFAULT_INPUT = "Q&A Blog Contents List.xlsx"
@@ -34,6 +44,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "generate":
         return run_generate(args)
+    if args.command == "plan-video":
+        return run_plan_video(args)
+    if args.command == "veo":
+        return run_veo(args)
+    if args.command == "veo-gemini":
+        return run_veo_gemini(args)
+    if args.command == "render":
+        return run_render(args)
 
     parser.print_help()
     return 1
@@ -72,6 +90,45 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--medical-review-minutes", type=float, default=0.0)
     generate.add_argument("--upload-publish-minutes", type=float, default=0.0)
     generate.add_argument("--notes", default="", help="Free-form timing notes for the CSV log.")
+
+    plan_video = subparsers.add_parser(
+        "plan-video",
+        help="Create scene prompts from scripts.json for Vertex AI Veo.",
+    )
+    plan_video.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
+    plan_video.add_argument(
+        "--model",
+        default=None,
+        help="Gemini model name. Defaults to GEMINI_MODEL or gemini-2.5-flash.",
+    )
+    plan_video.add_argument("--scenes", type=int, default=3, help="Number of scenes per language.")
+    plan_video.add_argument("--scene-duration", type=int, default=6, help="Seconds per scene.")
+
+    veo = subparsers.add_parser(
+        "veo",
+        help="Generate Veo clips from scene_prompts.json using Vertex AI.",
+    )
+    veo.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
+    veo.add_argument("--poll-seconds", type=int, default=10, help="Polling interval for Veo operations.")
+    veo.add_argument("--languages", help="Comma-separated languages to generate, e.g. english,korean.")
+    veo.add_argument("--max-clips", type=int, help="Maximum number of clips to generate for smoke tests.")
+
+    veo_gemini = subparsers.add_parser(
+        "veo-gemini",
+        help="Generate Veo clips from scene_prompts.json using GEMINI_API_KEY.",
+    )
+    veo_gemini.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
+    veo_gemini.add_argument("--poll-seconds", type=int, default=10, help="Polling interval for Veo operations.")
+    veo_gemini.add_argument("--languages", help="Comma-separated languages to generate, e.g. english,korean.")
+    veo_gemini.add_argument("--max-clips", type=int, help="Maximum number of clips to generate for smoke tests.")
+
+    render = subparsers.add_parser(
+        "render",
+        help="Render final 9:16 MP4 files from Veo clips with burned subtitles.",
+    )
+    render.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
+    render.add_argument("--languages", help="Comma-separated languages to render, e.g. english,korean.")
+    render.add_argument("--max-clips", type=int, help="Maximum number of clips to render for smoke tests.")
 
     return parser
 
@@ -199,3 +256,244 @@ def run_generate(args: argparse.Namespace) -> int:
 
     print(f"Timing log updated at {log_path}.")
     return 0
+
+
+def run_plan_video(args: argparse.Namespace) -> int:
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        print("GEMINI_API_KEY is missing. Add it to .env before planning video scenes.")
+        return 2
+
+    run_dir = Path(args.run)
+    scripts_path = run_dir / "scripts.json"
+    if not scripts_path.exists():
+        print(f"Missing scripts.json. Run `generate` first or check the run path: {run_dir}")
+        return 1
+
+    model = args.model or os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
+    started = time.monotonic()
+    try:
+        scripts = read_json(scripts_path)
+        plan_generation = generate_video_plan(
+            api_key=api_key,
+            model=model,
+            scripts=scripts,
+            scene_count=args.scenes,
+            scene_duration=args.scene_duration,
+        )
+        parsed = plan_generation.parsed
+        write_json(run_dir / "video_plan.json", parsed.get("video_plan", {}))
+        write_json(run_dir / "scene_prompts.json", parsed.get("scenes", {}))
+        write_text(run_dir / "raw_video_plan_response.txt", plan_generation.raw_text)
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "plan-video",
+                "status": "succeeded",
+                "model": model,
+                "scene_count": args.scenes,
+                "scene_duration_seconds": args.scene_duration,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+            },
+        )
+    except GeminiResponseParseError as exc:
+        write_text(run_dir / "raw_video_plan_response.txt", exc.raw_text)
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "plan-video",
+                "status": "failed",
+                "model": model,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "error": str(exc),
+            },
+        )
+        print(f"Video planning failed: {exc}")
+        return 1
+    except Exception as exc:
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "plan-video",
+                "status": "failed",
+                "model": model,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "error": str(exc),
+            },
+        )
+        print(f"Video planning failed: {exc}")
+        return 1
+
+    print(f"Wrote video plan artifacts to {run_dir}.")
+    return 0
+
+
+def run_veo(args: argparse.Namespace) -> int:
+    load_dotenv()
+    run_dir = Path(args.run)
+    scene_path = run_dir / "scene_prompts.json"
+    if not scene_path.exists():
+        print(f"Missing scene_prompts.json. Run `plan-video` first or check the run path: {run_dir}")
+        return 1
+
+    started = time.monotonic()
+    try:
+        ensure_vertex_prerequisites()
+        config = load_vertex_config()
+        scenes = filter_scenes(read_json(scene_path), languages=args.languages, max_clips=args.max_clips)
+        written = generate_veo_clips(
+            scenes=scenes,
+            output_dir=run_dir / "veo",
+            config=config,
+            poll_seconds=args.poll_seconds,
+        )
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "veo",
+                "status": "succeeded",
+                "model": config.model,
+                "vertex_project_id": config.project_id,
+                "vertex_location": config.location,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "clip_count": len(written),
+                "clips": [str(path) for path in written],
+            },
+        )
+    except Exception as exc:
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "veo",
+                "status": "failed",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "error": str(exc),
+            },
+        )
+        print(f"Veo generation failed: {exc}")
+        return 1
+
+    print(f"Wrote Veo clips to {run_dir / 'veo'}.")
+    return 0
+
+
+def run_veo_gemini(args: argparse.Namespace) -> int:
+    load_dotenv()
+    run_dir = Path(args.run)
+    scene_path = run_dir / "scene_prompts.json"
+    if not scene_path.exists():
+        print(f"Missing scene_prompts.json. Run `plan-video` first or check the run path: {run_dir}")
+        return 1
+
+    started = time.monotonic()
+    try:
+        config = load_gemini_veo_config()
+        scenes = filter_scenes(read_json(scene_path), languages=args.languages, max_clips=args.max_clips)
+        written = generate_gemini_veo_clips(
+            scenes=scenes,
+            output_dir=run_dir / "veo",
+            config=config,
+            poll_seconds=args.poll_seconds,
+        )
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "veo-gemini",
+                "status": "succeeded",
+                "model": config.model,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "clip_count": len(written),
+                "clips": [str(path) for path in written],
+            },
+        )
+    except Exception as exc:
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "veo-gemini",
+                "status": "failed",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "error": str(exc),
+            },
+        )
+        print(f"Gemini API Veo generation failed: {exc}")
+        return 1
+
+    print(f"Wrote Gemini API Veo clips to {run_dir / 'veo'}.")
+    return 0
+
+
+def run_render(args: argparse.Namespace) -> int:
+    run_dir = Path(args.run)
+    scene_path = run_dir / "scene_prompts.json"
+    if not scene_path.exists():
+        print(f"Missing scene_prompts.json. Run `plan-video` first or check the run path: {run_dir}")
+        return 1
+
+    started = time.monotonic()
+    try:
+        scenes = filter_scenes(read_json(scene_path), languages=args.languages, max_clips=args.max_clips)
+        rendered = render_language_videos(run_dir=run_dir, scenes=scenes)
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "render",
+                "status": "succeeded",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "videos": [{"language": item.language, "path": str(item.path)} for item in rendered],
+            },
+        )
+    except Exception as exc:
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "render",
+                "status": "failed",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "error": str(exc),
+            },
+        )
+        print(f"Render failed: {exc}")
+        return 1
+
+    print(f"Wrote final MP4 files to {run_dir / 'videos'}.")
+    return 0
+
+
+def filter_scenes(
+    scenes: dict[str, list[dict]],
+    *,
+    languages: str | None,
+    max_clips: int | None,
+) -> dict[str, list[dict]]:
+    selected_languages = None
+    if languages:
+        selected_languages = {item.strip() for item in languages.split(",") if item.strip()}
+
+    filtered: dict[str, list[dict]] = {}
+    remaining = max_clips
+    for language, language_scenes in scenes.items():
+        if selected_languages is not None and language not in selected_languages:
+            continue
+        chosen = list(language_scenes)
+        if remaining is not None:
+            if remaining <= 0:
+                break
+            chosen = chosen[:remaining]
+            remaining -= len(chosen)
+        if chosen:
+            filtered[language] = chosen
+
+    if not filtered:
+        raise ValueError("No scenes selected. Check --languages and --max-clips.")
+    return filtered
