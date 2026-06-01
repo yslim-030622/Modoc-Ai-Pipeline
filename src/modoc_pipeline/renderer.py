@@ -11,6 +11,9 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 
+XFADE_DURATION = 0.5
+
+
 class RenderError(RuntimeError):
     """Raised when local rendering cannot proceed."""
 
@@ -248,18 +251,17 @@ def _render_per_scene_sync(
     combined_audio_path = assets_dir / f"{language}_combined.wav"
     _concatenate_wav_files(list(per_scene_audio[s["scene_id"]] for s in language_scenes), combined_audio_path)
 
-    # Step 5: assemble final MP4
-    total_duration = sum(audio_durations)
-    _assemble_final_mp4(
-        concat_path=concat_path,
+    # Step 5: assemble final MP4 with xfade transitions between clips
+    total_audio_duration = sum(audio_durations)
+    _assemble_with_xfade(
+        clip_paths=extended_paths,
         audio_path=combined_audio_path,
         caption_images=caption_images,
-        audio_timed_scenes=audio_timed_scenes,
+        audio_durations=audio_durations,
         output_path=output_path,
-        total_duration=total_duration,
-        image_input_offset=2,
+        total_audio_duration=total_audio_duration,
     )
-    print(f"  {language}: {total_duration:.1f}s video — per-scene sync")
+    print(f"  {language}: {total_audio_duration:.1f}s video — per-scene xfade sync")
     return RenderedVideo(language=language, path=output_path)
 
 
@@ -305,37 +307,71 @@ def _concatenate_wav_files(wav_paths: list[Path], output_path: Path) -> None:
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 
-def _assemble_final_mp4(
+def _assemble_with_xfade(
     *,
-    concat_path: Path,
+    clip_paths: list[Path],
     audio_path: Path,
     caption_images: list[Path],
-    audio_timed_scenes: list[dict[str, Any]],
+    audio_durations: list[float],
     output_path: Path,
-    total_duration: float,
-    image_input_offset: int,
+    total_audio_duration: float,
 ) -> None:
-    """Merge extended video clips + TTS audio + caption overlays into final MP4."""
-    command = [
-        "ffmpeg", "-y",
-        "-f", "concat", "-safe", "0", "-i", str(concat_path),
-        "-i", str(audio_path),
-    ]
+    """Merge video clips with xfade transitions + TTS audio + caption overlays.
+
+    Clips are cross-faded with a short fade transition to eliminate hard cuts
+    and make freeze-frame extensions invisible at scene boundaries.
+    """
+    n = len(clip_paths)
+    xfade_dur = XFADE_DURATION if n > 1 else 0.0
+
+    command = ["ffmpeg", "-y"]
+    for clip in clip_paths:
+        command.extend(["-i", str(clip)])
+    command.extend(["-i", str(audio_path)])
     for img in caption_images:
         command.extend(["-loop", "1", "-i", str(img)])
 
-    filter_complex, video_label = build_overlay_filter_with_offset(
-        audio_timed_scenes, image_input_offset=image_input_offset
-    )
+    audio_input = n
+    img_input_start = n + 1
+    parts: list[str] = []
+
+    # Build xfade chain between all clips
+    current = "0:v"
+    xfade_offset_acc = 0.0
+    for i in range(1, n):
+        xfade_offset_acc += audio_durations[i - 1] - xfade_dur
+        out = f"xf{i}"
+        parts.append(
+            f"[{current}][{i}:v]xfade=transition=fade"
+            f":duration={xfade_dur:.3f}:offset={xfade_offset_acc:.3f}[{out}]"
+        )
+        current = out
+
+    # Build caption overlay chain on top of xfade result.
+    # Caption timing uses cumulative audio durations (not xfade-adjusted) to prevent
+    # adjacent captions from overlapping when the xfade compresses the video timeline.
+    caption_cursor = 0.0
+    for idx, dur in enumerate(audio_durations):
+        caption_start = caption_cursor
+        caption_end = caption_cursor + dur
+        img_input = img_input_start + idx
+        out = f"v{idx + 1}"
+        parts.append(
+            f"[{current}][{img_input}:v]overlay=0:0"
+            f":enable='between(t,{caption_start:.3f},{caption_end:.3f})':format=auto[{out}]"
+        )
+        current = out
+        caption_cursor += dur  # advance by full audio duration — no xfade offset
+
     command.extend([
-        "-filter_complex", filter_complex,
-        "-map", video_label,
-        "-map", "1:a",
-        "-t", f"{total_duration:.3f}",
+        "-filter_complex", ";".join(parts),
+        "-map", f"[{current}]",
+        "-map", f"{audio_input}:a",
+        "-t", f"{total_audio_duration:.3f}",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-c:a", "aac",
+        str(output_path),
     ])
-    command.append(str(output_path))
     subprocess.run(command, check=True)
 
 

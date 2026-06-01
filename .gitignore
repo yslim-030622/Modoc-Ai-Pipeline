@@ -9,5 +9,6 @@ __pycache__/
 
 outputs/
 logs/
+videos/
 *.egg-info/
 .pytest_cache/
