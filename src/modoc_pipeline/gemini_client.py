@@ -43,7 +43,7 @@ def generate_short_form_package(
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
-            temperature=0.4,
+            temperature=0.2,
         ),
     )
 
@@ -72,12 +72,22 @@ review aid.
 Hard constraints:
 - Return valid JSON only. Do not include Markdown fences.
 - Create scripts in English, Korean, and Spanish.
-- Each script must target 60 seconds or less.
+- Each script must target 35 seconds or less.
 - Do not diagnose the child. Do not invent facts not present in the expert answer.
+- Do not introduce treatments, tests, causes, timelines, or risk factors that are
+  absent from the expert answer.
 - Avoid unsafe certainty. Use cautious language such as "can", "may", and
   "ask a clinician" where appropriate.
 - Include a safety caveat when symptoms require medical attention.
 - Medical claims must be traceable to the expert answer text.
+- Preserve the expert answer's uncertainty. For example, "less likely" must not
+  become "not pneumonia", "not in the lungs", "safe", or "nothing to worry about".
+- Keep the parent-facing tone calm, direct, and non-sensational. Do not use fear
+  hooks, clickbait, or definitive reassurance.
+- Keep each language semantically equivalent. Translation may sound natural, but
+  it must not add or remove medical meaning.
+- Keep each script compact: one hook, 2-3 body bullets, one safety caveat, one CTA.
+- Keep all on-screen-ready text short enough for mobile subtitles.
 
 Return JSON with this exact top-level shape:
 {{
@@ -89,7 +99,7 @@ Return JSON with this exact top-level shape:
       "body": ["...", "..."],
       "safety_caveat": "...",
       "cta": "...",
-      "estimated_seconds": 45
+      "estimated_seconds": 30
     }},
     "korean": {{
       "language": "Korean",
@@ -98,7 +108,7 @@ Return JSON with this exact top-level shape:
       "body": ["...", "..."],
       "safety_caveat": "...",
       "cta": "...",
-      "estimated_seconds": 45
+      "estimated_seconds": 30
     }},
     "spanish": {{
       "language": "Spanish",
@@ -107,7 +117,7 @@ Return JSON with this exact top-level shape:
       "body": ["...", "..."],
       "safety_caveat": "...",
       "cta": "...",
-      "estimated_seconds": 45
+      "estimated_seconds": 30
     }}
   }},
   "medical_claims": [

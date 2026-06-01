@@ -21,19 +21,19 @@ from .artifacts import (
 from .excel_source import load_qna_sources
 from .gemini_client import GeminiResponseParseError, generate_short_form_package
 from .io_utils import read_json, write_json, write_text
-from .renderer import render_language_videos
+from .renderer import render_language_videos, render_shared_language_videos
+from .tts_client import generate_tts_per_scene, load_tts_config
 from .veo_client import (
-    ensure_vertex_prerequisites,
     generate_gemini_veo_clips,
-    generate_veo_clips,
+    generate_gemini_shared_veo_clips,
     load_gemini_veo_config,
-    load_vertex_config,
 )
 from .video_planner import generate_video_plan
 
 
 DEFAULT_INPUT = "Q&A Blog Contents List.xlsx"
-DEFAULT_OUTPUT_DIR = "outputs"
+DEFAULT_OUTPUT_DIR = "logs"
+DEFAULT_VIDEO_DIR = "videos"
 DEFAULT_LOG_PATH = "logs/pipeline_runs.csv"
 DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -48,10 +48,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_plan_video(args)
     if args.command == "veo":
         return run_veo(args)
-    if args.command == "veo-gemini":
-        return run_veo_gemini(args)
     if args.command == "render":
         return run_render(args)
+    if args.command == "tts":
+        return run_tts(args)
     if args.command == "run-all":
         return run_all(args)
 
@@ -71,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate scripts, claims, review packets, and timing log rows.",
     )
     generate.add_argument("--input", default=DEFAULT_INPUT, help="Path to the Q&A Excel workbook.")
-    generate.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for run artifacts.")
+    generate.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for JSON run logs.")
     generate.add_argument("--log-path", default=DEFAULT_LOG_PATH, help="CSV path for KPI timing logs.")
     generate.add_argument("--limit", type=int, default=1, help="Number of source rows to process.")
     generate.add_argument("--row", type=int, help="Specific Excel row number to process.")
@@ -95,63 +95,62 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_video = subparsers.add_parser(
         "plan-video",
-        help="Create scene prompts from scripts.json for Vertex AI Veo.",
+        help="Create scene prompts from scripts.json for Veo.",
     )
-    plan_video.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
+    plan_video.add_argument("--run", required=True, help="Path to a logs/<run_id> directory.")
     plan_video.add_argument(
         "--model",
         default=None,
         help="Gemini model name. Defaults to GEMINI_MODEL or gemini-2.5-flash.",
     )
-    plan_video.add_argument("--scenes", type=int, default=3, help="Number of scenes per language.")
+    plan_video.add_argument("--scenes", type=int, default=4, help="Number of scenes per language.")
     plan_video.add_argument("--scene-duration", type=int, default=6, help="Seconds per scene.")
 
     veo = subparsers.add_parser(
         "veo",
-        help="Generate Veo clips from scene_prompts.json using Vertex AI.",
+        help="Generate Veo clips from scene_prompts.json using the latest high-quality Veo model.",
     )
-    veo.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
+    veo.add_argument("--run", required=True, help="Path to a logs/<run_id> directory.")
     veo.add_argument("--poll-seconds", type=int, default=10, help="Polling interval for Veo operations.")
     veo.add_argument("--languages", help="Comma-separated languages to generate, e.g. english,korean.")
     veo.add_argument("--scene-ids", help="Comma-separated scene IDs to generate, e.g. scene_03.")
     veo.add_argument("--max-clips", type=int, help="Maximum number of clips to generate for smoke tests.")
 
-    veo_gemini = subparsers.add_parser(
-        "veo-gemini",
-        help="Generate Veo clips from scene_prompts.json using GEMINI_API_KEY.",
-    )
-    veo_gemini.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
-    veo_gemini.add_argument("--poll-seconds", type=int, default=10, help="Polling interval for Veo operations.")
-    veo_gemini.add_argument("--languages", help="Comma-separated languages to generate, e.g. english,korean.")
-    veo_gemini.add_argument("--scene-ids", help="Comma-separated scene IDs to generate, e.g. scene_03.")
-    veo_gemini.add_argument("--max-clips", type=int, help="Maximum number of clips to generate for smoke tests.")
-
     render = subparsers.add_parser(
         "render",
         help="Render final 9:16 MP4 files from Veo clips with burned subtitles.",
     )
-    render.add_argument("--run", required=True, help="Path to an outputs/<run_id> directory.")
+    render.add_argument("--run", required=True, help="Path to a logs/<run_id> directory.")
+    render.add_argument("--video-dir", default=DEFAULT_VIDEO_DIR, help="Directory for final videos.")
     render.add_argument("--languages", help="Comma-separated languages to render, e.g. english,korean.")
     render.add_argument("--max-clips", type=int, help="Maximum number of clips to render for smoke tests.")
 
+    tts = subparsers.add_parser(
+        "tts",
+        help="Generate Gemini TTS narration for localized tracks.",
+    )
+    tts.add_argument("--run", required=True, help="Path to a logs/<run_id> directory.")
+    tts.add_argument("--languages", help="Comma-separated languages to synthesize.")
+
     run_all_parser = subparsers.add_parser(
         "run-all",
-        help="Run generate, plan-video, Gemini Veo, and render in one command.",
+        help="Run generate, plan-video, Veo, TTS, and render in one command.",
     )
     add_source_arguments(run_all_parser)
-    run_all_parser.add_argument("--scenes", type=int, default=3, help="Number of scenes per language.")
+    run_all_parser.add_argument("--scenes", type=int, default=4, help="Number of scenes per language.")
     run_all_parser.add_argument("--scene-duration", type=int, default=6, help="Seconds per scene.")
     run_all_parser.add_argument("--poll-seconds", type=int, default=10, help="Polling interval for Veo operations.")
     run_all_parser.add_argument("--languages", help="Comma-separated languages to generate/render.")
     run_all_parser.add_argument("--max-clips", type=int, help="Maximum number of clips for smoke tests.")
     run_all_parser.add_argument("--notes", default="run-all", help="Free-form timing notes for the CSV log.")
+    run_all_parser.add_argument("--video-dir", default=DEFAULT_VIDEO_DIR, help="Directory for final videos.")
 
     return parser
 
 
 def add_source_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", default=DEFAULT_INPUT, help="Path to the Q&A Excel workbook.")
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for run artifacts.")
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for JSON run logs.")
     parser.add_argument("--log-path", default=DEFAULT_LOG_PATH, help="CSV path for KPI timing logs.")
     parser.add_argument("--row", type=int, help="Specific Excel row number to process.")
     parser.add_argument(
@@ -317,7 +316,9 @@ def run_plan_video(args: argparse.Namespace) -> int:
         )
         parsed = plan_generation.parsed
         write_json(run_dir / "video_plan.json", parsed.get("video_plan", {}))
-        write_json(run_dir / "scene_prompts.json", parsed.get("scenes", {}))
+        write_json(run_dir / "visual_scenes.json", parsed.get("visual_scenes", []))
+        write_json(run_dir / "localized_tracks.json", parsed.get("localized_tracks", {}))
+        write_json(run_dir / "scene_prompts.json", parsed)
         write_text(run_dir / "raw_video_plan_response.txt", plan_generation.raw_text)
         write_json(
             run_dir / "video_status.json",
@@ -375,28 +376,46 @@ def run_veo(args: argparse.Namespace) -> int:
 
     started = time.monotonic()
     try:
-        ensure_vertex_prerequisites()
-        config = load_vertex_config()
-        scenes = filter_scenes(
-            read_json(scene_path),
-            languages=args.languages,
-            scene_ids=args.scene_ids,
-            max_clips=args.max_clips,
-        )
-        written = generate_veo_clips(
-            scenes=scenes,
-            output_dir=run_dir / "veo",
-            config=config,
-            poll_seconds=args.poll_seconds,
-        )
+        config = load_gemini_veo_config()
+        visual_path = run_dir / "visual_scenes.json"
+        if visual_path.exists():
+            all_visual_scenes = read_json(visual_path)
+            visual_scenes = filter_visual_scenes(
+                all_visual_scenes,
+                scene_ids=args.scene_ids,
+                max_clips=args.max_clips,
+            )
+            initial_frame_path = _find_initial_frame(
+                run_dir / "veo" / "shared",
+                all_scenes=all_visual_scenes,
+                selected_scenes=visual_scenes,
+            )
+            written = generate_gemini_shared_veo_clips(
+                visual_scenes=visual_scenes,
+                output_dir=run_dir / "veo",
+                config=config,
+                poll_seconds=args.poll_seconds,
+                initial_frame_path=initial_frame_path,
+            )
+        else:
+            scenes = filter_scenes(
+                read_json(scene_path),
+                languages=args.languages,
+                scene_ids=args.scene_ids,
+                max_clips=args.max_clips,
+            )
+            written = generate_gemini_veo_clips(
+                scenes=scenes,
+                output_dir=run_dir / "veo",
+                config=config,
+                poll_seconds=args.poll_seconds,
+            )
         write_json(
             run_dir / "video_status.json",
             {
                 "stage": "veo",
                 "status": "succeeded",
                 "model": config.model,
-                "vertex_project_id": config.project_id,
-                "vertex_location": config.location,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "automated_generation_seconds": round(time.monotonic() - started, 2),
                 "clip_count": len(written),
@@ -421,59 +440,6 @@ def run_veo(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_veo_gemini(args: argparse.Namespace) -> int:
-    load_dotenv()
-    run_dir = Path(args.run)
-    scene_path = run_dir / "scene_prompts.json"
-    if not scene_path.exists():
-        print(f"Missing scene_prompts.json. Run `plan-video` first or check the run path: {run_dir}")
-        return 1
-
-    started = time.monotonic()
-    try:
-        config = load_gemini_veo_config()
-        scenes = filter_scenes(
-            read_json(scene_path),
-            languages=args.languages,
-            scene_ids=args.scene_ids,
-            max_clips=args.max_clips,
-        )
-        written = generate_gemini_veo_clips(
-            scenes=scenes,
-            output_dir=run_dir / "veo",
-            config=config,
-            poll_seconds=args.poll_seconds,
-        )
-        write_json(
-            run_dir / "video_status.json",
-            {
-                "stage": "veo-gemini",
-                "status": "succeeded",
-                "model": config.model,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "automated_generation_seconds": round(time.monotonic() - started, 2),
-                "clip_count": len(written),
-                "clips": [str(path) for path in written],
-            },
-        )
-    except Exception as exc:
-        write_json(
-            run_dir / "video_status.json",
-            {
-                "stage": "veo-gemini",
-                "status": "failed",
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "automated_generation_seconds": round(time.monotonic() - started, 2),
-                "error": str(exc),
-            },
-        )
-        print(f"Gemini API Veo generation failed: {exc}")
-        return 1
-
-    print(f"Wrote Gemini API Veo clips to {run_dir / 'veo'}.")
-    return 0
-
-
 def run_render(args: argparse.Namespace) -> int:
     run_dir = Path(args.run)
     scene_path = run_dir / "scene_prompts.json"
@@ -483,13 +449,33 @@ def run_render(args: argparse.Namespace) -> int:
 
     started = time.monotonic()
     try:
-        scenes = filter_scenes(
-            read_json(scene_path),
-            languages=args.languages,
-            scene_ids=None,
-            max_clips=args.max_clips,
-        )
-        rendered = render_language_videos(run_dir=run_dir, scenes=scenes)
+        visual_path = run_dir / "visual_scenes.json"
+        tracks_path = run_dir / "localized_tracks.json"
+        if visual_path.exists() and tracks_path.exists():
+            visual_scenes, localized_tracks = select_shared_plan(
+                visual_scenes=read_json(visual_path),
+                localized_tracks=read_json(tracks_path),
+                languages=parse_csv(args.languages),
+                max_clips=args.max_clips,
+            )
+            rendered = render_shared_language_videos(
+                run_dir=run_dir,
+                visual_scenes=visual_scenes,
+                localized_tracks=localized_tracks,
+                video_output_dir=video_output_dir_for_run(run_dir, Path(args.video_dir)),
+            )
+        else:
+            scenes = filter_scenes(
+                read_json(scene_path),
+                languages=args.languages,
+                scene_ids=None,
+                max_clips=args.max_clips,
+            )
+            rendered = render_language_videos(
+                run_dir=run_dir,
+                scenes=scenes,
+                video_output_dir=video_output_dir_for_run(run_dir, Path(args.video_dir)),
+            )
         write_json(
             run_dir / "video_status.json",
             {
@@ -514,7 +500,61 @@ def run_render(args: argparse.Namespace) -> int:
         print(f"Render failed: {exc}")
         return 1
 
-    print(f"Wrote final MP4 files to {run_dir / 'videos'}.")
+    print(f"Wrote final MP4 files to {video_output_dir_for_run(run_dir, Path(args.video_dir))}.")
+    return 0
+
+
+def run_tts(args: argparse.Namespace) -> int:
+    load_dotenv()
+    run_dir = Path(args.run)
+    tracks_path = run_dir / "localized_tracks.json"
+    if not tracks_path.exists():
+        print(f"Missing localized_tracks.json. Run `plan-video` first or check the run path: {run_dir}")
+        return 1
+    started = time.monotonic()
+    try:
+        config = load_tts_config()
+        languages = parse_csv(args.languages)
+        # Per-scene TTS: each scene gets its own WAV for frame-accurate sync.
+        # The renderer auto-detects per-scene files and uses them preferentially.
+        scene_audio = generate_tts_per_scene(
+            localized_tracks=read_json(tracks_path),
+            output_dir=run_dir / "audio",
+            config=config,
+            languages=languages,
+        )
+        audio_summary = {
+            language: {sid: str(p) for sid, p in scenes.items()}
+            for language, scenes in scene_audio.items()
+        }
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "tts",
+                "status": "succeeded",
+                "model": config.model,
+                "voice": "per-language",
+                "mode": "per-scene",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "audio": audio_summary,
+            },
+        )
+    except Exception as exc:
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "tts",
+                "status": "failed",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - started, 2),
+                "error": str(exc),
+            },
+        )
+        print(f"TTS failed: {exc}")
+        return 1
+
+    print(f"Wrote per-scene TTS audio to {run_dir / 'audio'}.")
     return 0
 
 
@@ -586,8 +626,17 @@ def run_all(args: argparse.Namespace) -> int:
             scene_duration=args.scene_duration,
         )
         parsed_plan = plan_generation.parsed
+        visual_scenes, localized_tracks = select_shared_plan(
+            visual_scenes=parsed_plan.get("visual_scenes", []),
+            localized_tracks=parsed_plan.get("localized_tracks", {}),
+            languages=parse_csv(args.languages),
+            max_clips=args.max_clips,
+        )
         write_json(run_dir / "video_plan.json", parsed_plan.get("video_plan", {}))
-        write_json(run_dir / "scene_prompts.json", parsed_plan.get("scenes", {}))
+        write_json(run_dir / "visual_scenes.json", visual_scenes)
+        write_json(run_dir / "localized_tracks.json", localized_tracks)
+        # Keep the full model response for debugging prompt drift and schema changes.
+        write_json(run_dir / "scene_prompts.json", parsed_plan)
         write_text(run_dir / "raw_video_plan_response.txt", plan_generation.raw_text)
         write_json(
             run_dir / "video_status.json",
@@ -605,14 +654,8 @@ def run_all(args: argparse.Namespace) -> int:
 
         veo_started = time.monotonic()
         veo_config = load_gemini_veo_config()
-        selected_scenes = filter_scenes(
-            parsed_plan.get("scenes", {}),
-            languages=args.languages,
-            scene_ids=None,
-            max_clips=args.max_clips,
-        )
-        clips = generate_gemini_veo_clips(
-            scenes=selected_scenes,
+        clips = generate_gemini_shared_veo_clips(
+            visual_scenes=visual_scenes,
             output_dir=run_dir / "veo",
             config=veo_config,
             poll_seconds=args.poll_seconds,
@@ -620,7 +663,7 @@ def run_all(args: argparse.Namespace) -> int:
         write_json(
             run_dir / "video_status.json",
             {
-                "stage": "veo-gemini",
+                "stage": "veo",
                 "status": "succeeded",
                 "model": veo_config.model,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -629,10 +672,37 @@ def run_all(args: argparse.Namespace) -> int:
                 "clips": [str(path) for path in clips],
             },
         )
-        print("Stage complete: veo-gemini")
+        print("Stage complete: veo")
+
+        tts_started = time.monotonic()
+        tts_config = load_tts_config()
+        scene_audio = generate_tts_per_scene(
+            localized_tracks=localized_tracks,
+            output_dir=run_dir / "audio",
+            config=tts_config,
+        )
+        write_json(
+            run_dir / "video_status.json",
+            {
+                "stage": "tts",
+                "status": "succeeded",
+                "model": tts_config.model,
+                "voice": "per-language",
+                "mode": "per-scene",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "automated_generation_seconds": round(time.monotonic() - tts_started, 2),
+                "audio": {lang: {sid: str(p) for sid, p in scenes.items()} for lang, scenes in scene_audio.items()},
+            },
+        )
+        print("Stage complete: tts")
 
         render_started = time.monotonic()
-        rendered = render_language_videos(run_dir=run_dir, scenes=selected_scenes)
+        rendered = render_shared_language_videos(
+            run_dir=run_dir,
+            visual_scenes=visual_scenes,
+            localized_tracks=localized_tracks,
+            video_output_dir=video_output_dir_for_run(run_dir, Path(args.video_dir)),
+        )
         write_json(
             run_dir / "video_status.json",
             {
@@ -701,3 +771,107 @@ def filter_scenes(
     if not filtered:
         raise ValueError("No scenes selected. Check --languages and --max-clips.")
     return filtered
+
+
+def parse_csv(value: str | None) -> set[str] | None:
+    if not value:
+        return None
+    parsed = {item.strip() for item in value.split(",") if item.strip()}
+    return parsed or None
+
+
+def filter_visual_scenes(
+    visual_scenes: list[dict],
+    *,
+    scene_ids: str | None,
+    max_clips: int | None,
+) -> list[dict]:
+    selected_scene_ids = parse_csv(scene_ids)
+    selected = [
+        scene for scene in visual_scenes
+        if selected_scene_ids is None or scene.get("scene_id") in selected_scene_ids
+    ]
+    if max_clips is not None:
+        selected = selected[:max_clips]
+    if not selected:
+        raise ValueError("No visual scenes selected. Check --scene-ids and --max-clips.")
+    return selected
+
+
+def select_shared_plan(
+    *,
+    visual_scenes: list[dict],
+    localized_tracks: dict[str, list[dict]],
+    languages: set[str] | None,
+    max_clips: int | None,
+) -> tuple[list[dict], dict[str, list[dict]]]:
+    """Select a consistent shared-visual subset across all localized tracks.
+
+    The same Veo clips must be reused for every language; otherwise the final
+    English/Korean/Spanish videos drift visually and become hard to compare.
+    This validation fails early when the planner omits a track or invents a
+    scene ID that has no matching visual clip.
+    """
+
+    selected_visuals = visual_scenes[:max_clips] if max_clips is not None else visual_scenes
+    if not selected_visuals:
+        raise ValueError("Video plan does not contain visual_scenes.")
+
+    selected_ids = [str(scene.get("scene_id", "")).strip() for scene in selected_visuals]
+    selected_id_set = set(selected_ids)
+    if len(selected_id_set) != len(selected_ids) or "" in selected_id_set:
+        raise ValueError("visual_scenes must have unique non-empty scene_id values.")
+
+    selected_tracks: dict[str, list[dict]] = {}
+    for language, tracks in localized_tracks.items():
+        if languages is not None and language not in languages:
+            continue
+        by_scene_id = {str(track.get("scene_id", "")).strip(): track for track in tracks}
+        missing = [scene_id for scene_id in selected_ids if scene_id not in by_scene_id]
+        if missing:
+            raise ValueError(f"localized_tracks.{language} is missing scene(s): {', '.join(missing)}")
+        selected_tracks[language] = [by_scene_id[scene_id] for scene_id in selected_ids]
+
+    if not selected_tracks:
+        raise ValueError("No localized tracks selected. Check --languages.")
+    return selected_visuals, selected_tracks
+
+
+def _find_initial_frame(
+    shared_dir: Path,
+    *,
+    all_scenes: list[dict],
+    selected_scenes: list[dict],
+) -> Path | None:
+    """Find the last-frame JPEG of the scene immediately before the first selected scene.
+
+    When re-generating a subset of clips (e.g. scene_02..04 only), this seeds
+    frame continuation so scene_02 still uses scene_01's last frame as its
+    first frame, rather than starting from scratch with no continuity anchor.
+    """
+    if not selected_scenes:
+        return None
+    first_selected_id = selected_scenes[0].get("scene_id", "")
+    all_ids = [s.get("scene_id", "") for s in all_scenes]
+    try:
+        idx = all_ids.index(first_selected_id)
+    except ValueError:
+        return None
+    if idx == 0:
+        return None
+    prev_id = all_ids[idx - 1]
+    candidate = shared_dir / f"{prev_id}_last_frame.jpg"
+    return candidate if candidate.exists() else None
+
+
+def video_output_dir_for_run(run_dir: Path, video_root: Path = Path(DEFAULT_VIDEO_DIR)) -> Path:
+    source_path = run_dir / "source.json"
+    if source_path.exists():
+        try:
+            source = read_json(source_path)
+            row_number = source.get("row_number")
+            if row_number:
+                return video_root / f"Row_{row_number}"
+        except Exception:
+            pass
+    return video_root / run_dir.name
