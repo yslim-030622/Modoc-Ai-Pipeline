@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import csv
 import json
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 from .excel_source import QnaSource
 
@@ -23,6 +25,83 @@ TIMING_FIELDS = [
     "human_total_minutes",
     "notes",
 ]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Automated stage timing
+# ─────────────────────────────────────────────────────────────────────────────
+
+STAGE_TIMING_FILE = "timing.json"
+
+
+def record_stage(run_dir: Path, stage: str, duration_seconds: float, status: str = "ok") -> None:
+    """Write one stage's timing into run_dir/timing.json.
+
+    Each run writes only to its own run_dir, so concurrent runs never
+    conflict. The file is read-modify-write but only from the single
+    process that owns this run_dir.
+    """
+    path = run_dir / STAGE_TIMING_FILE
+    run_dir.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+
+    data.setdefault("stages", {})[stage] = {
+        "duration_seconds": round(duration_seconds, 2),
+        "status": status,
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def finalize_run_timing(run_dir: Path, *, source_row: int, total_seconds: float, logs_dir: Path) -> None:
+    """Append the completed run's timing summary to logs/run_timings.jsonl.
+
+    Uses O_APPEND so each line write is atomic on macOS/Linux (POSIX guarantees
+    atomicity for writes under PIPE_BUF, which is >= 512 bytes everywhere).
+    Concurrent runs append independently without locking.
+    """
+    path = run_dir / STAGE_TIMING_FILE
+    stages: dict[str, Any] = {}
+    if path.exists():
+        try:
+            stages = json.loads(path.read_text(encoding="utf-8")).get("stages", {})
+        except Exception:
+            pass
+
+    summary = {
+        "run_id": run_dir.name,
+        "source_row": source_row,
+        "total_seconds": round(total_seconds, 2),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "stages": stages,
+    }
+
+    jsonl_path = logs_dir / "run_timings.jsonl"
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    with jsonl_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+
+
+@contextmanager
+def timed_stage(run_dir: Path, stage: str) -> Generator[None, None, None]:
+    """Context manager that records stage duration to timing.json on exit.
+
+    Usage:
+        with timed_stage(run_dir, "meme_plan"):
+            ... do work ...
+    """
+    started = time.monotonic()
+    status = "ok"
+    try:
+        yield
+    except Exception:
+        status = "failed"
+        raise
+    finally:
+        record_stage(run_dir, stage, time.monotonic() - started, status)
 
 
 @dataclass(frozen=True)

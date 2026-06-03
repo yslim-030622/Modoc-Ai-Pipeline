@@ -14,7 +14,9 @@ from dotenv import load_dotenv
 from .artifacts import (
     HumanTiming,
     append_timing_log,
+    finalize_run_timing,
     make_run_id,
+    timed_stage,
     write_failure_artifacts,
     write_success_artifacts,
 )
@@ -192,20 +194,21 @@ def run_generate(args: argparse.Namespace) -> int:
         run_id = make_run_id(source)
         run_dir = output_dir / run_id
 
-        # ── Stage 2: grounding + script generation ───────────────────────────
+        # ── Stage 1: grounding + script generation ───────────────────────────
         print(f"\n[1/5] scripts — grounding + script generation...")
         raw_text = ""
         try:
-            stage_result = run_grounded_script_stage(
-                api_key=api_key,
-                model=model,
-                judge_model=judge_model,
-                source=source,
-                enable_search=not args.skip_search and _env_bool("GEMINI_ENABLE_SEARCH", default=True),
-                max_repair_attempts=args.max_repair_attempts,
-                quality_gate=args.quality_gate,
-                run_dir=run_dir,
-            )
+            with timed_stage(run_dir, "scripts"):
+                stage_result = run_grounded_script_stage(
+                    api_key=api_key,
+                    model=model,
+                    judge_model=judge_model,
+                    source=source,
+                    enable_search=not args.skip_search and _env_bool("GEMINI_ENABLE_SEARCH", default=True),
+                    max_repair_attempts=args.max_repair_attempts,
+                    quality_gate=args.quality_gate,
+                    run_dir=run_dir,
+                )
             generation = stage_result["generation"]
             elapsed = round(time.monotonic() - total_started, 1)
             write_success_artifacts(
@@ -245,7 +248,7 @@ def run_generate(args: argparse.Namespace) -> int:
             print(f"  Script generation failed for row {row_number}: {exc}")
             continue
 
-        # ── Stages 3-6: meme pipeline ────────────────────────────────────────
+        # ── Stages 2-5: meme pipeline ────────────────────────────────────────
         meme_ok = _run_meme_for_run_dir(
             run_dir=run_dir,
             api_key=api_key,
@@ -260,6 +263,8 @@ def run_generate(args: argparse.Namespace) -> int:
             continue
 
         total_elapsed = round(time.monotonic() - total_started, 1)
+        finalize_run_timing(run_dir, source_row=source.row_number,
+                            total_seconds=total_elapsed, logs_dir=output_dir)
         print(f"\n[generate] Row {row_number} complete in {total_elapsed}s → {video_output_dir_for_run(run_dir, Path(args.video_dir))}")
 
     if failures:
@@ -347,10 +352,11 @@ def _run_meme_for_run_dir(
     # Stage 2: meme-plan
     print(f"\n[2/5] meme-plan — researching trends and generating plan...")
     try:
-        result = generate_meme_plan(api_key=api_key, model=meme_model, scripts=scripts, topic=topic)
-        write_json(run_dir / "meme_plan.json", result.parsed)
-        write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
-        meme_plan = result.parsed
+        with timed_stage(run_dir, "meme_plan"):
+            result = generate_meme_plan(api_key=api_key, model=meme_model, scripts=scripts, topic=topic)
+            write_json(run_dir / "meme_plan.json", result.parsed)
+            write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
+            meme_plan = result.parsed
         print("  Done.")
     except Exception as exc:
         print(f"  meme-plan failed: {exc}")
@@ -359,13 +365,14 @@ def _run_meme_for_run_dir(
     # Stage 3: imagen
     print(f"\n[3/5] imagen — generating meme images...")
     try:
-        imagen_config = load_imagen_config()
-        image_result = generate_meme_images(
-            meme_plan=meme_plan,
-            output_dir=run_dir / "meme_images",
-            config=imagen_config,
-            languages=languages,
-        )
+        with timed_stage(run_dir, "imagen"):
+            imagen_config = load_imagen_config()
+            image_result = generate_meme_images(
+                meme_plan=meme_plan,
+                output_dir=run_dir / "meme_images",
+                config=imagen_config,
+                languages=languages,
+            )
         print(f"  Generated {sum(len(v) for v in image_result.values())} image(s).")
     except Exception as exc:
         print(f"  imagen failed: {exc}")
@@ -376,19 +383,21 @@ def _run_meme_for_run_dir(
     if not skip_tts:
         print(f"\n[4/5] tts + bgm — generating voiceover and background music...")
         try:
-            tts_config = load_tts_config()
-            generate_meme_gemini_tts(
-                meme_plan=meme_plan,
-                output_dir=run_dir / "meme_audio",
-                config=tts_config,
-                languages=languages,
-            )
+            with timed_stage(run_dir, "tts"):
+                tts_config = load_tts_config()
+                generate_meme_gemini_tts(
+                    meme_plan=meme_plan,
+                    output_dir=run_dir / "meme_audio",
+                    config=tts_config,
+                    languages=languages,
+                )
         except Exception as exc:
             print(f"  TTS failed (non-fatal, continuing without audio): {exc}")
 
         try:
-            bgm_dir = run_dir / "meme_bgm"
-            bgm_result = generate_all_bgm(output_dir=bgm_dir, api_key=api_key, languages=languages)
+            with timed_stage(run_dir, "bgm"):
+                bgm_dir = run_dir / "meme_bgm"
+                bgm_result = generate_all_bgm(output_dir=bgm_dir, api_key=api_key, languages=languages)
             print(f"  BGM generated for: {', '.join(bgm_result.keys())}")
         except Exception as exc:
             print(f"  BGM failed (non-fatal, continuing without BGM): {exc}")
@@ -399,16 +408,17 @@ def _run_meme_for_run_dir(
     # Stage 5: render
     print(f"\n[5/5] render — assembling slideshow videos...")
     try:
-        out_dir = video_output_dir_for_run(run_dir, video_dir)
-        rendered = render_meme_slideshow(
-            run_dir=run_dir,
-            meme_plan=meme_plan,
-            image_dir=run_dir / "meme_images",
-            video_output_dir=out_dir,
-            languages=languages,
-            zoom_enabled=not no_zoom,
-            bgm_dir=bgm_dir,
-        )
+        with timed_stage(run_dir, "render"):
+            out_dir = video_output_dir_for_run(run_dir, video_dir)
+            rendered = render_meme_slideshow(
+                run_dir=run_dir,
+                meme_plan=meme_plan,
+                image_dir=run_dir / "meme_images",
+                video_output_dir=out_dir,
+                languages=languages,
+                zoom_enabled=not no_zoom,
+                bgm_dir=bgm_dir,
+            )
         write_json(run_dir / "meme_status.json", {
             "stage": "generate",
             "status": "succeeded",

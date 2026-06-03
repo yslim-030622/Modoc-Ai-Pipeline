@@ -1,252 +1,148 @@
 # MoDoc AI Video Pipeline
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Gemini](https://img.shields.io/badge/Gemini-3.5_Flash_Lite-4285F4?logo=google&logoColor=white)
-![Veo](https://img.shields.io/badge/Veo-3.1-34A853?logo=google&logoColor=white)
+![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?logo=google&logoColor=white)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-rendering-007808?logo=ffmpeg&logoColor=white)
 
-MoDoc is a pediatric health platform that answers parents' questions — things like "my 3-year-old isn't talking much, is that normal?" or "should antibiotics help with a cough?" The problem was turning those Q&A posts into short-form videos for YouTube Shorts, Instagram Reels, and Facebook. Every video needed to be in Korean, English, and Spanish. Doing that by hand — writing three scripts, generating visuals, recording narration, editing, exporting — took hours per video.
+MoDoc is a pediatric health platform where parents ask real questions — "my baby poops 5 times a day, is that normal?" or "which flu treatment is safer, IV or oral?" Turning those Q&A posts into short-form videos by hand took hours per video: write three scripts, generate visuals, record narration, edit, export, repeat for three languages.
 
-This pipeline automates the whole thing. You point it at a row in the Q&A spreadsheet, and it outputs three ready-to-upload MP4 files. Script generation, video generation, voiceover, and subtitle rendering all happen without manual intervention.
+This pipeline does all of it from one command. You give it a row number from the Q&A spreadsheet, and it produces three upload-ready MP4 files in English, Korean, and Spanish.
 
-## Video Preview
+## Output Preview
 
-> Row 7 — "Is my 3-year-old's growth and language development on track?"
+> Row 24 — "How many times per day should a 2-month-old baby poop?"
 
 <p align="center">
-  <img src="docs/images/row7_english.jpg" width="195" alt="English scene 1 — child sitting on sofa" />
+  <img src="docs/images/row24_english_01.jpg" width="185" alt="English scene 1" />
   &nbsp;
-  <img src="docs/images/row7_english_2.jpg" width="195" alt="English scene 2 — height measurement close-up" />
+  <img src="docs/images/row24_korean_01.jpg" width="185" alt="Korean scene 1" />
   &nbsp;
-  <img src="docs/images/row7_korean.jpg" width="195" alt="Korean scene 1 — child sitting on sofa" />
-  &nbsp;
-  <img src="docs/images/row7_korean_2.jpg" width="195" alt="Korean scene 2 — height measurement close-up" />
+  <img src="docs/images/row24_spanish_01.jpg" width="185" alt="Spanish scene 1" />
 </p>
 
-<p align="center"><em>English (Scene 1 · 2) &nbsp;·&nbsp; Korean (Scene 1 · 2) &nbsp;·&nbsp; Same Veo clips, localized narration and subtitles per language</em></p>
+<p align="center"><em>English &nbsp;·&nbsp; Korean &nbsp;·&nbsp; Spanish — same pipeline run, culturally adapted per language</em></p>
 
-All three language versions share the same Veo-generated video clips. Only the voiceover and subtitles differ — which also means the visual quality is identical across languages.
+Each language gets its own illustration style, character, and meme format. English uses a TikTok POV format, Korean uses a 짤방 webtoon style, Spanish uses a Mamá latina relatability format.
 
 ## How It Works
 
-One command runs the full pipeline:
-
 ```bash
-python3 -m modoc_pipeline run-all --row 7
+python3 -m modoc_pipeline generate 24
+python3 -m modoc_pipeline generate 23 12 25   # multiple rows at once
 ```
 
-Internally that does five stages in sequence:
+Five stages run in sequence per row:
 
-```text
-generate → plan-video → veo → tts → render
-```
-
-| Stage | What Happens |
+| Stage | What happens |
 |-------|-------------|
-| `generate` | Reads the Q&A row from Excel, uses Gemini Search grounding, writes parent-friendly scripts in English, Korean, and Spanish, and extracts medical claims for reviewer sign-off |
-| `plan-video` | Calls Gemini again to create scene contracts: narration source, muted-viewer visual goal, must-show objects, gentle meme beat, and concise Veo prompts |
-| `veo` | Generates run-level Gemini reference images, calls Veo 3.1, uses reference/last-frame continuation, and runs Gemini visual QA on sampled frames with scene-level retries |
-| `tts` | Calls Gemini TTS to narrate each scene individually — Korean with Kore voice, English with Puck, Spanish with Leda. Per-scene audio means no tempo compression |
-| `render` | Calls FFmpeg to extend each Veo clip to match its narration duration, concatenate clips, overlay captions timed to actual audio, and export the final MP4 |
+| `scripts` | Reads the Q&A row, runs Google Search grounding for medical accuracy, writes parent-friendly scripts in all three languages |
+| `meme-plan` | Picks a culturally-appropriate viral meme format per language, defines a locked character description for visual consistency |
+| `imagen` | Generates 4 scene images per language using Gemini image generation, passes scene 1 as a reference image to scenes 2-4 to keep the character consistent |
+| `tts + bgm` | Generates voiceover with Gemini TTS, generates background music with Lyria tuned per culture (K-pop synth-pop, hyperpop-lite, reggaeton-pop) |
+| `render` | Concatenates images and audio with FFmpeg, bakes meme text, mixes BGM at 32% under the voiceover, exports 9:16 MP4 |
 
-## What's Automated
+## What Gets Automated
 
-- Reading Q&A content from `Q&A Blog Contents List.xlsx`
-- Generating medically-cautious scripts in English, Korean, and Spanish
-- Extracting medical claims with source evidence for reviewer packets
-- Writing a Markdown review packet per run
-- Planning 4-scene Veo prompts with a controlled mouthless MoDoc Guide and concrete infographic props
-- Generating Veo 3.1 clips with frame continuation for cross-clip visual consistency
-- Running Gemini visual QA against sampled Veo frames and regenerating failed scenes automatically
-- Per-scene TTS narration with language-specific voices (Kore, Puck, Leda)
-- Extending Veo clips to match narration duration (no speed compression)
-- Overlaying captions timed to actual audio per scene
-- Rendering final 9:16 MP4 files for YouTube Shorts / Instagram Reels
+- Reading Q&A content from the Excel spreadsheet
+- Writing medically cautious scripts in English, Korean, and Spanish
+- Researching trending meme formats per language via Google Search
+- Generating culturally-adapted illustrations with a consistent character across scenes
+- Voiceover narration with language-specific voices (Kore, Puck, Leda)
+- Background music generation tuned per cultural context
+- Final MP4 assembly with text overlays, audio mix, and fade transitions
+- Stage-level timing logged per run for performance tracking
 
-## What's Still Manual
+## What Stays Manual
 
-- Medical review — a clinician still needs to sign off before publishing
-- Publishing to YouTube, Instagram, and Facebook
-- Final publishing decision after reviewing the MP4 and review packet
-- View count collection for KPI tracking
+- Medical review — a clinician signs off before any video gets published
+- Publishing to YouTube Shorts, Instagram Reels, and Facebook
+- Final visual check of the output MP4
 
 ## Tech Stack
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Script generation | Gemini 3.5 Flash Lite + Google Search grounding | Medical accuracy, multilingual quality, structured output, source grounding |
-| Visual references | Gemini image generation | Run-level character/style anchor before Veo |
-| Video generation | Veo 3.1 (`veo-3.1-generate-preview`) | Best available 9:16 animated video quality |
-| Frame continuity | Veo image-to-video (reference/last frame → next clip) | Reduces character and style drift across independently generated clips |
-| TTS narration | Gemini TTS (`gemini-3.1-flash-tts-preview`) | Per-scene generation eliminates audio compression artifacts |
-| Language voices | Kore (Korean) · Puck (English) · Leda (Spanish) | Natural pronunciation per language |
-| Video assembly | FFmpeg | clip extension (tpad), caption overlay (RGBA), audio concat |
-| Source data | Excel via openpyxl | Reads existing Q&A spreadsheet as-is |
-
-## Pipeline Architecture
-
-```
-Q&A Blog Contents List.xlsx
-         │
-         ▼
-  [generate] ──────────────────────────────────────────────────────────────
-  Gemini 3.5 Flash Lite + Google Search                                     │
-  ├── scripts.json          (English / Korean / Spanish)                   │
-  ├── claims.json           (medical claims + evidence)                    │
-  └── review_packet.md      (clinician review aid)                         │
-         │                                                                  │
-         ▼                                                                  │
-  [plan-video]                                                              │
-  Gemini 3.5 Flash Lite                                                     │
-  ├── character_bible       (mouthless MoDoc Guide + palette + background)  │
-  ├── scene_contracts       (must-show/must-not-show + visual goal)         │
-  ├── visual_scenes.json    (4 Veo prompts, shared across languages)        │
-  └── localized_tracks.json (captions + TTS text per scene per language)   │
-         │                                                                  │
-         ▼                                                                  │
-  [veo]                                                                     │
-  Gemini image + Veo 3.1 + Gemini visual QA                                 │
-  ├── references/character_reference.png                                    │
-  ├── scene_01.mp4  ← reference image when available                       │
-  ├── scene_02.mp4  ← scene_01 last frame as first frame                  │
-  ├── scene_03.mp4  ← scene_02 last frame as first frame                  │
-  └── scene_04.mp4  ← scene_03 last frame as first frame                  │
-         │                                                                  │
-         ▼                                                                  │
-  [tts]                                                                     │
-  Gemini TTS (per scene × per language = 12 audio files)                   │
-  ├── audio/korean/scene_01.wav  audio/english/scene_01.wav  audio/spanish/scene_01.wav
-  └── ...                                                                   │
-         │                                                                  │
-         ▼                                                                  │
-  [render] ─────────────────────────────────────────────────────────────────
-  FFmpeg                                                                    │
-  ├── Extend each clip to match its TTS audio duration (freeze last frame) │
-  ├── Concatenate extended clips + concatenated audio                      │
-  ├── Overlay captions timed to actual audio durations (not fixed seconds) │
-  └── Export 3 × 9:16 MP4                                                  │
-         │
-         ▼
-  videos/Row_7/
-  ├── Row_7_english.mp4
-  ├── Row_7_korean.mp4
-  └── Row_7_spanish.mp4
-```
+| Layer | Tool |
+|-------|------|
+| Script generation | Gemini 2.5 Flash + Google Search grounding |
+| Image generation | Gemini image generation (image-to-image for scene consistency) |
+| TTS narration | Gemini TTS — Kore (Korean), Puck (English), Leda (Spanish) |
+| Background music | Lyria — culturally-tuned prompts per language |
+| Video assembly | FFmpeg |
+| Source data | Excel via openpyxl |
 
 ## Setup
 
 ```bash
-# 1. Clone and install
 git clone <repo-url> && cd Modoc-Ai-Pipeline
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-
-# 2. Set up API key
-cp .env.example .env
-# Add your Gemini API key to .env:
-# GEMINI_API_KEY=your_key_here
-
-# 3. Install FFmpeg (required for rendering)
 brew install ffmpeg
+
+cp .env.example .env
+# Add GEMINI_API_KEY to .env
 ```
-
-`.env` reference:
-
-```env
-GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-3.5-flash-lite
-GEMINI_JUDGE_MODEL=gemini-3.5-flash-lite
-GEMINI_ENABLE_SEARCH=true
-GEMINI_VEO_MODEL=veo-3.1-generate-preview
-GEMINI_VEO_PERSON_GENERATION=allow_all
-GEMINI_VEO_GENERATE_AUDIO=false
-
-GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview
-GEMINI_TTS_VOICE=Kore
-GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
-VISUAL_STYLE=character-infographic
-VISUAL_QA=true
-MAX_VISUAL_RETRIES=2
-BGM_MODE=off
-```
-
-## Commands
-
-### One-command generation
-
-```bash
-# Full pipeline for a specific row
-python3 -m modoc_pipeline run-all --row 7
-
-# Smoke test — English only, 1 clip (fast, cheap)
-python3 -m modoc_pipeline run-all --row 7 --languages english --max-clips 1
-```
-
-### Step-by-step (useful for debugging or re-running one stage)
-
-```bash
-# 1. Generate scripts + review packet
-python3 -m modoc_pipeline generate --row 7
-
-# 2. Plan video scenes
-python3 -m modoc_pipeline plan-video --run logs/<run_id>
-
-# 3. Generate Veo clips (takes ~15–20 min for 4 scenes)
-python3 -m modoc_pipeline veo --run logs/<run_id>
-
-# 4. Generate per-scene TTS narration
-python3 -m modoc_pipeline tts --run logs/<run_id>
-
-# 5. Render final MP4 files
-python3 -m modoc_pipeline render --run logs/<run_id>
-```
-
-Re-generating specific clips only (e.g. after a hallucination in scene 3):
-
-```bash
-python3 -m modoc_pipeline veo --run logs/<run_id> --scene-ids scene_03,scene_04
-```
-
-The pipeline will automatically pick up `scene_02_last_frame.jpg` as the starting frame for scene_03, maintaining continuity.
 
 ## Output Files
 
-**Per-run artifacts** in `logs/<run_id>/`:
+Each run creates a folder under `logs/<run_id>/`:
 
 ```
-scripts.json              — English / Korean / Spanish scripts
-claims.json               — Medical claims with evidence references
-review_packet.md          — Reviewer-ready Markdown document
-visual_scenes.json        — 4 Veo scene prompts with character + environment bibles
-visual_qa/                — Gemini frame QA reports per scene
-references/               — Gemini-generated character/style reference images
-localized_tracks.json     — Captions and TTS text per scene per language
-audio/{language}/         — Per-scene WAV files (scene_01.wav, scene_02.wav, …)
-veo/shared/               — Shared Veo clips + last-frame JPEGs for continuity
-render_assets/            — Extended clips, caption PNGs, SRT files, concat lists
-video_status.json         — Current pipeline stage and status
+scripts.json          — 3-language scripts
+claims.json           — medical claims with evidence links
+review_packet.md      — clinician review document
+meme_plan.json        — scene plan with character and format decisions
+meme_images/          — generated scene images per language
+meme_audio/           — voiceover WAV files per scene per language
+meme_bgm/             — background music per language
+timing.json           — per-stage duration log for this run
 ```
 
-**Final videos** in `videos/Row_<n>/`:
+Final videos go to `videos/Row_<n>/`:
 
 ```
-Row_7_english.mp4
-Row_7_korean.mp4
-Row_7_spanish.mp4
+Row_24_english_meme.mp4
+Row_24_korean_meme.mp4
+Row_24_spanish_meme.mp4
 ```
 
-## What's Coming Next
+Timing across all runs is aggregated in `logs/run_timings.jsonl` for statistics.
 
-A few things that would meaningfully improve this pipeline, roughly in priority order:
+---
 
-**Visual consistency** — Veo still drifts occasionally even with frame continuation and the character bible. The plan is to pass scene_01's first frame as a reference image to all subsequent clips (Veo 3.1 supports up to 3 reference images). That should eliminate most remaining character drift.
+## 한국어
 
-**Medical review integration** — Right now the clinician gets a Markdown packet and signs off manually. The next step is a simple approval status field that blocks the `render` stage until the review passes, so nothing goes to upload without sign-off.
+MoDoc은 부모들이 실제 질문을 올리는 소아과 건강 플랫폼입니다. "아기가 하루에 5번 변을 봐요, 정상인가요?" 같은 Q&A 포스트를 숏폼 영상으로 만드는 작업을 자동화했습니다. 기존에는 영상 하나당 3개 언어 스크립트 작성, 비주얼 제작, 녹음, 편집, 내보내기까지 몇 시간이 걸렸습니다.
 
-**Thumbnail generation** — Each video needs a thumbnail for YouTube. The current plan is to use Gemini Imagen to generate a thumbnail that matches the video's character and topic, using the character bible as the prompt.
+이 파이프라인은 명령어 하나로 전부 처리합니다. Q&A 스프레드시트의 row 번호를 입력하면 한국어, 영어, 스페인어 MP4 3개가 나옵니다.
 
-**Platform publishing** — Upload helpers for YouTube Shorts, Instagram Reels, and Facebook with the right metadata (title, description, tags) pre-filled from the generated scripts.
+## 명령어
 
-**Batch processing** — Running all rows in the spreadsheet in one go, with a status dashboard that shows what's been generated, what's pending review, and what's been published.
+```bash
+python3 -m modoc_pipeline generate 24
+python3 -m modoc_pipeline generate 23 12 25   # 여러 row 동시 처리
+```
 
-**A/B visual style testing** — Generate two versions of each video with different visual styles and track which performs better by view count.
+## 5단계 파이프라인
+
+| 단계 | 내용 |
+|------|------|
+| `scripts` | Q&A row 읽기, Google Search 기반 의료 정보 검증, 3개 언어 스크립트 생성 |
+| `meme-plan` | 언어별로 유행하는 밈 포맷 선택, 씬 간 캐릭터 일관성을 위한 외형 고정 |
+| `imagen` | Gemini로 언어별 씬 이미지 4장 생성, scene 1 이미지를 2-4에 레퍼런스로 전달해 캐릭터 통일 |
+| `tts + bgm` | Gemini TTS 보이스오버 생성, Lyria로 문화권별 BGM 생성 (K-pop, 하이퍼팝, 레게톤) |
+| `render` | FFmpeg으로 이미지, 오디오, 밈 텍스트, BGM을 합쳐 9:16 MP4 완성 |
+
+## 자동화된 것
+
+- 스프레드시트에서 Q&A 콘텐츠 읽기
+- 의료적으로 검증된 3개 언어 스크립트 작성
+- 언어별 유행 밈 포맷 리서치 및 적용
+- 씬 간 캐릭터가 일관된 일러스트 생성
+- 언어별 보이스오버, 배경음악 생성
+- 최종 MP4 조립 및 내보내기
+- 스테이지별 처리 시간 자동 기록
+
+## 수동으로 남은 것
+
+- 의료 검토 — 의사 확인 전까지 영상 미게시
+- YouTube Shorts, Instagram Reels, Facebook 업로드
+- 최종 영상 육안 확인
