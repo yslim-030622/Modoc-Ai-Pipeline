@@ -11,25 +11,15 @@ from typing import Any, Sequence
 
 from dotenv import load_dotenv
 
-from .artifacts import (
-    HumanTiming,
-    append_timing_log,
-    finalize_run_timing,
-    make_run_id,
-    timed_stage,
-    write_failure_artifacts,
-    write_success_artifacts,
-)
-from .excel_source import load_qna_sources
-from .gemini_client import GeminiResponseParseError, generate_short_form_package
-from .grounding import generate_grounding_report
+from .artifacts import timed_stage
 from .io_utils import read_json, write_json, write_text
-from .quality import judge_and_repair
 from .tts_client import generate_meme_gemini_tts, load_tts_config
 from .meme_planner import generate_meme_plan
 from .imagen_client import generate_meme_images, load_imagen_config
+from .orchestration.graph import build_pipeline_graph
 from .renderer import render_meme_slideshow
 from .bgm_client import generate_all_bgm
+from .dashboard import serve_dashboard
 
 
 DEFAULT_INPUT = "Q&A Blog Contents List.xlsx"
@@ -37,7 +27,6 @@ DEFAULT_OUTPUT_DIR = "logs"
 DEFAULT_VIDEO_DIR = "videos"
 DEFAULT_LOG_PATH = "logs/pipeline_runs.csv"
 DEFAULT_MODEL = "gemini-3.5-flash"
-DEFAULT_JUDGE_MODEL = "gemini-3.5-flash"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -56,6 +45,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_render_meme(args)
     if args.command == "meme-run-all":
         return run_meme_all(args)
+    if args.command == "dashboard":
+        return run_dashboard(args)
 
     parser.print_help()
     return 1
@@ -81,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--skip-tts", action="store_true", help="Skip TTS (produce silent videos).")
     generate.add_argument("--no-zoom", action="store_true", help="Disable Ken Burns zoom effect.")
     generate.add_argument("--model", default=None, help="Gemini model. Defaults to GEMINI_MODEL env var.")
-    add_quality_arguments(generate)
+    generate.add_argument("--skip-search", action="store_true", help="Skip Gemini Google Search grounding.")
 
     # ── Meme slideshow pipeline (individual stages for power users) ──────────
 
@@ -136,19 +127,18 @@ def build_parser() -> argparse.ArgumentParser:
     meme_all_parser.add_argument("--skip-tts", action="store_true", help="Skip edge-tts (produce silent videos).")
     meme_all_parser.add_argument("--no-zoom", action="store_true", help="Disable Ken Burns zoom effect.")
 
+    dashboard_parser = subparsers.add_parser(
+        "dashboard",
+        help="Serve a localhost dashboard for live agent pipeline status.",
+    )
+    dashboard_parser.add_argument("--host", default="localhost", help="Dashboard bind host.")
+    dashboard_parser.add_argument("--port", type=int, default=8765, help="Dashboard port.")
+    dashboard_parser.add_argument("--logs-dir", default=DEFAULT_OUTPUT_DIR, help="Logs directory to watch.")
+
     return parser
 
 
 
-def add_quality_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--skip-search", action="store_true", help="Skip Gemini Google Search grounding.")
-    parser.add_argument(
-        "--judge-model",
-        default=None,
-        help="Gemini judge model. Defaults to GEMINI_JUDGE_MODEL or gemini-3.5-flash-lite.",
-    )
-    parser.add_argument("--max-repair-attempts", type=int, default=2)
-    parser.add_argument("--quality-gate", default="strict", choices=("strict", "standard"))
 
 
 def run_generate(args: argparse.Namespace) -> int:
@@ -164,11 +154,11 @@ def run_generate(args: argparse.Namespace) -> int:
         return 2
 
     model = args.model or os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
-    judge_model = args.judge_model or os.getenv("GEMINI_JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
     log_path = Path(args.log_path)
     languages = parse_csv(args.languages)
+    graph = build_pipeline_graph()
 
     failures = 0
     for row_number in args.rows:
@@ -176,96 +166,31 @@ def run_generate(args: argparse.Namespace) -> int:
         print(f"[generate] Row {row_number}")
         print(f"{'='*60}")
         total_started = time.monotonic()
-
-        # ── Stage 1: load source ─────────────────────────────────────────────
-        try:
-            sources = load_qna_sources(input_path, status_filter="any", row_number=row_number, limit=1)
-        except Exception as exc:
-            print(f"  Failed to load source workbook: {exc}")
+        print("\n[agentic] Running LangGraph production pipeline...")
+        initial_state = {
+            "row_number": row_number,
+            "input_path": str(input_path),
+            "output_dir": str(output_dir),
+            "log_path": str(log_path),
+            "video_dir": str(Path(args.video_dir)),
+            "languages": sorted(languages) if languages else None,
+            "api_key": api_key,
+            "model": model,
+            "enable_search": not args.skip_search and _env_bool("GEMINI_ENABLE_SEARCH", default=True),
+            "skip_tts": args.skip_tts,
+            "no_zoom": args.no_zoom,
+            "total_started": total_started,
+            "agent_trace": [],
+        }
+        final_state = graph.invoke(initial_state)
+        if final_state.get("failure_status"):
             failures += 1
-            continue
-
-        if not sources:
-            print(f"  Row {row_number} not found in {input_path}.")
-            failures += 1
-            continue
-
-        source = sources[0]
-        run_id = make_run_id(source)
-        run_dir = output_dir / run_id
-
-        # ── Stage 1: grounding + script generation ───────────────────────────
-        print(f"\n[1/5] scripts — grounding + script generation...")
-        raw_text = ""
-        try:
-            with timed_stage(run_dir, "scripts"):
-                stage_result = run_grounded_script_stage(
-                    api_key=api_key,
-                    model=model,
-                    judge_model=judge_model,
-                    source=source,
-                    enable_search=not args.skip_search and _env_bool("GEMINI_ENABLE_SEARCH", default=True),
-                    max_repair_attempts=args.max_repair_attempts,
-                    quality_gate=args.quality_gate,
-                    run_dir=run_dir,
-                )
-            generation = stage_result["generation"]
-            elapsed = round(time.monotonic() - total_started, 1)
-            write_success_artifacts(
-                run_dir=run_dir,
-                source=source,
-                generation=generation["parsed"],
-                raw_text=generation["raw_text"],
-                status={
-                    "run_id": run_id,
-                    "status": "succeeded",
-                    "source_row": source.row_number,
-                    "model": model,
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "automated_generation_seconds": elapsed,
-                },
-                grounding_report=stage_result["grounding_report"],
-                quality_reports=stage_result["quality_reports"],
-            )
-            append_timing_log(log_path=log_path, run_id=run_id, source_row=source.row_number,
-                              timing=HumanTiming())
-            print(f"  Done ({elapsed}s).")
-        except GeminiResponseParseError as exc:
-            raw_text = exc.raw_text
-            failures += 1
-            write_failure_artifacts(run_dir=run_dir, source=source, raw_text=raw_text,
-                                    status={"run_id": run_id, "status": "failed",
-                                            "source_row": source.row_number, "error": str(exc),
-                                            "generated_at": datetime.now(timezone.utc).isoformat()})
-            print(f"  Script generation failed for row {row_number}: {exc}")
-            continue
-        except Exception as exc:
-            failures += 1
-            write_failure_artifacts(run_dir=run_dir, source=source, raw_text=raw_text,
-                                    status={"run_id": run_id, "status": "failed",
-                                            "source_row": source.row_number, "error": str(exc),
-                                            "generated_at": datetime.now(timezone.utc).isoformat()})
-            print(f"  Script generation failed for row {row_number}: {exc}")
-            continue
-
-        # ── Stages 2-5: meme pipeline ────────────────────────────────────────
-        meme_ok = _run_meme_for_run_dir(
-            run_dir=run_dir,
-            api_key=api_key,
-            model=model,
-            languages=languages,
-            skip_tts=args.skip_tts,
-            no_zoom=args.no_zoom,
-            video_dir=Path(args.video_dir),
-        )
-        if not meme_ok:
-            failures += 1
+            print(f"  Failed closed: {final_state.get('failure_message', 'unknown error')}")
             continue
 
         total_elapsed = round(time.monotonic() - total_started, 1)
-        finalize_run_timing(run_dir, source_row=source.row_number,
-                            total_seconds=total_elapsed, logs_dir=output_dir)
-        print(f"\n[generate] Row {row_number} complete in {total_elapsed}s → {video_output_dir_for_run(run_dir, Path(args.video_dir))}")
+        output_path = video_output_dir_for_run(Path(final_state["run_dir"]), Path(args.video_dir))
+        print(f"\n[generate] Row {row_number} complete in {total_elapsed}s → {output_path}")
 
     if failures:
         print(f"\nCompleted with {failures} failure(s).")
@@ -273,57 +198,11 @@ def run_generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_grounded_script_stage(
-    *,
-    api_key: str,
-    model: str,
-    judge_model: str,
-    source,
-    enable_search: bool,
-    max_repair_attempts: int,
-    quality_gate: str,
-    run_dir: Path,
-) -> dict[str, Any]:
-    grounding = generate_grounding_report(
-        api_key=api_key,
-        model=judge_model,
-        source=source,
-        enable_search=enable_search,
-    )
-    write_json(run_dir / "grounding_report.json", grounding.parsed)
-    write_text(run_dir / "raw_grounding_response.txt", grounding.raw_text)
+def run_dashboard(args: argparse.Namespace) -> int:
+    serve_dashboard(host=args.host, port=args.port, logs_dir=Path(args.logs_dir))
+    return 0
 
-    def generate_once(
-        repair_instructions: str = "",
-        previous_payload: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], str]:
-        generation = generate_short_form_package(
-            api_key=api_key,
-            model=model,
-            source=source,
-            grounding_report=grounding.parsed,
-            repair_instructions=repair_instructions,
-            previous_payload=previous_payload,
-        )
-        return generation.parsed, generation.raw_text
 
-    initial_payload, initial_raw = generate_once()
-    judged = judge_and_repair(
-        api_key=api_key,
-        judge_model=judge_model,
-        stage="script_package",
-        payload=initial_payload,
-        raw_text=initial_raw,
-        context={"source": source.to_dict(), "grounding_report": grounding.parsed},
-        repair_fn=generate_once,
-        max_repair_attempts=max_repair_attempts,
-        quality_gate=quality_gate,
-    )
-    return {
-        "grounding_report": grounding.parsed,
-        "generation": {"parsed": judged.payload, "raw_text": judged.raw_text},
-        "quality_reports": {"script_package": judged.quality_reports},
-    }
 
 
 def _run_meme_for_run_dir(
@@ -355,6 +234,9 @@ def _run_meme_for_run_dir(
         with timed_stage(run_dir, "meme_plan"):
             result = generate_meme_plan(api_key=api_key, model=meme_model, scripts=scripts, topic=topic)
             write_json(run_dir / "meme_plan.json", result.parsed)
+            write_json(run_dir / "trend_research.json", result.trend_research)
+            write_json(run_dir / "creative_candidates.json", result.creative_candidates)
+            write_json(run_dir / "creative_scores.json", result.creative_scores)
             write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
             meme_plan = result.parsed
         print("  Done.")
@@ -397,7 +279,7 @@ def _run_meme_for_run_dir(
         try:
             with timed_stage(run_dir, "bgm"):
                 bgm_dir = run_dir / "meme_bgm"
-                bgm_result = generate_all_bgm(output_dir=bgm_dir, api_key=api_key, languages=languages)
+                bgm_result = generate_all_bgm(output_dir=bgm_dir, api_key=api_key, meme_plan=meme_plan, languages=languages)
             print(f"  BGM generated for: {', '.join(bgm_result.keys())}")
         except Exception as exc:
             print(f"  BGM failed (non-fatal, continuing without BGM): {exc}")
@@ -480,6 +362,9 @@ def run_meme_plan(args: argparse.Namespace) -> int:
         print(f"Researching meme trends and generating plan for: {topic}")
         result = generate_meme_plan(api_key=api_key, model=model, scripts=scripts, topic=topic)
         write_json(run_dir / "meme_plan.json", result.parsed)
+        write_json(run_dir / "trend_research.json", result.trend_research)
+        write_json(run_dir / "creative_candidates.json", result.creative_candidates)
+        write_json(run_dir / "creative_scores.json", result.creative_scores)
         write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
         write_json(
             run_dir / "meme_status.json",
@@ -693,6 +578,9 @@ def run_meme_all(args: argparse.Namespace) -> int:
         print(f"\n[1/4] meme-plan — researching trends and generating plan...")
         result = generate_meme_plan(api_key=api_key, model=model, scripts=scripts, topic=topic)
         write_json(run_dir / "meme_plan.json", result.parsed)
+        write_json(run_dir / "trend_research.json", result.trend_research)
+        write_json(run_dir / "creative_candidates.json", result.creative_candidates)
+        write_json(run_dir / "creative_scores.json", result.creative_scores)
         write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
         meme_plan = result.parsed
         print("  Done.")
@@ -742,6 +630,7 @@ def run_meme_all(args: argparse.Namespace) -> int:
             bgm_result = generate_all_bgm(
                 output_dir=bgm_dir,
                 api_key=api_key,
+                meme_plan=meme_plan,
                 languages=languages,
             )
             print(f"  Generated BGM for: {', '.join(bgm_result.keys())}")

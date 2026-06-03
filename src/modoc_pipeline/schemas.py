@@ -5,10 +5,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 LanguageKey = Literal["english", "korean", "spanish"]
+CaptionRole = Literal["hook", "tension", "insight", "relief"]
+CaptionStyle = Literal["impact", "clean_reels", "korean_jjal", "spanish_social"]
 
 
 class GroundingCitation(BaseModel):
@@ -99,13 +103,27 @@ class MemeFormat(str, Enum):
     RELATABILITY = "relatability"
 
 
+class BgmConfigSpec(BaseModel):
+    bpm: int = Field(default=110, ge=60, le=200)
+    density: float = Field(default=0.72, ge=0.0, le=1.0)
+    brightness: float = Field(default=0.75, ge=0.0, le=1.0)
+    guidance: float = Field(default=4.0, ge=0.0, le=6.0)
+    temperature: float = Field(default=1.0, ge=0.0, le=3.0)
+
+
 class MemeScene(BaseModel):
     scene_id: str
     meme_format: MemeFormat
+    caption_role: CaptionRole = "hook"
     top_text: str = ""
     bottom_text: str
     image_prompt: str
-    duration_seconds: float = Field(default=3.0, ge=2.0, le=6.0)
+    duration_seconds: float = Field(default=3.0, ge=1.0, le=10.0)
+
+    @field_validator("duration_seconds", mode="before")
+    @classmethod
+    def clamp_duration(cls, v: Any) -> float:
+        return max(1.0, min(10.0, float(v)))
     tts_text: str = ""
 
     @field_validator("scene_id")
@@ -120,6 +138,13 @@ class MemeLangPlan(BaseModel):
     language: LanguageKey
     cultural_context: str
     trending_hooks: list[str] = Field(min_length=1, max_length=5)
+    creative_angle: str = ""
+    trend_rationale: str = ""
+    caption_style: CaptionStyle = "impact"
+    tts_style: str = ""
+    bgm_prompt: str = ""
+    bgm_config: BgmConfigSpec = Field(default_factory=BgmConfigSpec)
+    avoid_cliches: list[str] = Field(default_factory=list)
     visual_style_anchor: str  # shared art style + character + palette applied to ALL scenes
     character_sheet: str  # locked character description: exact hair, clothing, skin tone, body shape — repeated verbatim in every scene prompt
     scenes: list[MemeScene] = Field(min_length=3, max_length=5)
@@ -130,3 +155,69 @@ class MemePlan(BaseModel):
     korean: MemeLangPlan
     spanish: MemeLangPlan
     source_topic: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def inject_language_keys(cls, data: Any) -> Any:
+        for key in ("english", "korean", "spanish"):
+            if isinstance(data.get(key), dict) and "language" not in data[key]:
+                data[key] = {**data[key], "language": key}
+        return data
+
+
+class TrendFormat(BaseModel):
+    format_name: str
+    platform: str
+    hook_templates: list[str] = Field(default_factory=list)
+    caption_style: str = ""
+    visual_editing_style: str = ""
+    audio_mood: str = ""
+    why_it_works: str = ""
+    avoid: list[str] = Field(default_factory=list)
+
+
+class TrendResearch(BaseModel):
+    english: list[TrendFormat] = Field(default_factory=list)
+    korean: list[TrendFormat] = Field(default_factory=list)
+    spanish: list[TrendFormat] = Field(default_factory=list)
+
+
+class CreativeCandidate(BaseModel):
+    candidate_id: str
+    language: LanguageKey
+    creative_angle: str
+    trend_rationale: str
+    hook_template: str
+    caption_style: CaptionStyle
+    visual_style_anchor: str
+    character_sheet: str
+    tts_style: str
+    bgm_prompt: str
+    bgm_config: BgmConfigSpec = Field(default_factory=BgmConfigSpec)
+    avoid_cliches: list[str] = Field(default_factory=list)
+    scene_beats: list[str] = Field(min_length=4, max_length=4)
+
+
+class CreativeCandidateSet(BaseModel):
+    english: list[CreativeCandidate] = Field(min_length=3, max_length=3)
+    korean: list[CreativeCandidate] = Field(min_length=3, max_length=3)
+    spanish: list[CreativeCandidate] = Field(min_length=3, max_length=3)
+
+
+class CreativeScore(BaseModel):
+    candidate_id: str
+    language: LanguageKey
+    hook_strength: int = Field(ge=1, le=5)
+    native_fit: int = Field(ge=1, le=5)
+    retention: int = Field(ge=1, le=5)
+    medical_safety: int = Field(ge=1, le=5)
+    not_cringe: int = Field(ge=1, le=5)
+    visual_feasibility: int = Field(ge=1, le=5)
+    selected: bool = False
+    rationale: str = ""
+
+
+class CreativeScoreSet(BaseModel):
+    english: list[CreativeScore] = Field(min_length=3, max_length=3)
+    korean: list[CreativeScore] = Field(min_length=3, max_length=3)
+    spanish: list[CreativeScore] = Field(min_length=3, max_length=3)

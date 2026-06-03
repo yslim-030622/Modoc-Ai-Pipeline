@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from dataclasses import dataclass
@@ -13,6 +14,48 @@ from pydantic import ValidationError
 
 from .excel_source import QnaSource
 from .schemas import ScriptPackage
+
+
+# Keywords that cause 400 INVALID_ARGUMENT when passed to Gemini response_schema.
+# NUMBER type fields with minimum/maximum (especially minimum: 0.0) and numeric
+# default values are rejected by the API. Stripping these keeps the structural
+# schema intact while letting prompts + Pydantic handle the value constraints.
+_GEMINI_STRIP_KEYS = frozenset({
+    "default", "minimum", "maximum", "minItems", "maxItems",
+    "exclusiveMinimum", "exclusiveMaximum",
+})
+
+
+def gemini_schema(model_cls: type) -> dict[str, Any]:
+    """Return a Gemini-compatible schema dict from a Pydantic model class.
+
+    Resolves $refs inline and strips keywords that cause 400 INVALID_ARGUMENT.
+    Use this whenever passing a schema that contains NUMBER-typed fields
+    (floats) or numeric default values to GenerateContentConfig.
+    """
+    raw = copy.deepcopy(model_cls.model_json_schema())
+    defs = raw.pop("$defs", {})
+    resolved = _resolve_refs(raw, defs)
+    return _strip_keys(resolved)
+
+
+def _resolve_refs(obj: Any, defs: dict[str, Any]) -> Any:
+    if isinstance(obj, dict):
+        if "$ref" in obj:
+            ref_name = obj["$ref"].split("/")[-1]
+            return _resolve_refs(copy.deepcopy(defs.get(ref_name, {})), defs)
+        return {k: _resolve_refs(v, defs) for k, v in obj.items() if k != "$defs"}
+    if isinstance(obj, list):
+        return [_resolve_refs(item, defs) for item in obj]
+    return obj
+
+
+def _strip_keys(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: _strip_keys(v) for k, v in obj.items() if k not in _GEMINI_STRIP_KEYS}
+    if isinstance(obj, list):
+        return [_strip_keys(item) for item in obj]
+    return obj
 
 
 @dataclass(frozen=True)
