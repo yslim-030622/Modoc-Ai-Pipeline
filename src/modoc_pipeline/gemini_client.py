@@ -9,8 +9,10 @@ from typing import Any
 
 from google import genai
 from google.genai import types
+from pydantic import ValidationError
 
 from .excel_source import QnaSource
+from .schemas import ScriptPackage
 
 
 @dataclass(frozen=True)
@@ -34,28 +36,51 @@ def generate_short_form_package(
     api_key: str,
     model: str,
     source: QnaSource,
+    grounding_report: dict[str, Any] | None = None,
+    repair_instructions: str = "",
+    previous_payload: dict[str, Any] | None = None,
 ) -> GeminiGeneration:
     client = genai.Client(api_key=api_key)
-    prompt = build_generation_prompt(source)
+    prompt = build_generation_prompt(
+        source,
+        grounding_report=grounding_report,
+        repair_instructions=repair_instructions,
+        previous_payload=previous_payload,
+    )
 
     response = client.models.generate_content(
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
+            response_schema=ScriptPackage,
             temperature=0.2,
         ),
     )
 
     raw_text = response.text or ""
     try:
-        parsed = parse_json_response(raw_text)
+        parsed = ScriptPackage.model_validate_json(raw_text).model_dump()
+    except ValidationError as exc:
+        try:
+            parsed = ScriptPackage.model_validate(parse_json_response(raw_text)).model_dump()
+        except Exception as inner:
+            raise GeminiResponseParseError(
+                raw_text,
+                f"Gemini returned invalid script package: {exc}; fallback parse failed: {inner}",
+            ) from inner
     except Exception as exc:
         raise GeminiResponseParseError(raw_text, f"Gemini returned invalid JSON: {exc}") from exc
     return GeminiGeneration(parsed=parsed, raw_text=raw_text)
 
 
-def build_generation_prompt(source: QnaSource) -> str:
+def build_generation_prompt(
+    source: QnaSource,
+    *,
+    grounding_report: dict[str, Any] | None = None,
+    repair_instructions: str = "",
+    previous_payload: dict[str, Any] | None = None,
+) -> str:
     """Build a single prompt that produces scripts and review artifacts together.
 
     Medical claims are separated from the scripts because reviewers need a
@@ -63,6 +88,18 @@ def build_generation_prompt(source: QnaSource) -> str:
     Keeping both in one model call preserves consistency between the generated
     scripts and the review packet.
     """
+
+    grounding_text = json.dumps(grounding_report or {}, ensure_ascii=False, indent=2)
+    repair_text = ""
+    if repair_instructions:
+        repair_text = (
+            "\nRepair instructions from Gemini quality gate:\n"
+            f"{repair_instructions}\n\n"
+            "Previous failed JSON payload to repair:\n"
+            f"{json.dumps(previous_payload or {}, ensure_ascii=False, indent=2)}\n"
+            "Repair the previous payload instead of starting over. Keep medically "
+            "supported content and change only fields needed to pass the gate.\n"
+        )
 
     return f"""
 You are helping build a semi-automated short-form video pipeline for pediatric
@@ -80,13 +117,26 @@ Hard constraints:
   "ask a clinician" where appropriate.
 - Include a safety caveat when symptoms require medical attention.
 - Medical claims must be traceable to the expert answer text.
+- If Grounding report is provided, medical claims may also be traceable to a
+  listed supported_facts item. Do not use web information unless it appears in
+  supported_facts.
 - Preserve the expert answer's uncertainty. For example, "less likely" must not
   become "not pneumonia", "not in the lungs", "safe", or "nothing to worry about".
 - Keep the parent-facing tone calm, direct, and non-sensational. Do not use fear
   hooks, clickbait, or definitive reassurance.
+- Make the script sound like a short social video, not a blog paragraph.
+- Structure every script for retention:
+  1) 0-2 second hook: a parent-recognizable question, misconception, or "wait, this can happen?" moment.
+  2) A gentle tension beat: myth-vs-fact, parent POV, or "the key detail is..." turn.
+  3) A medically supported correction in plain spoken language.
+  4) A calm safety caveat / CTA.
+- Add engagement through structure and rhythm, not drama. A tiny conversational
+  joke, gentle surprise, or relatable parent phrasing is allowed if it does not
+  add medical claims.
+- Avoid robotic reading. Use short spoken lines with natural pauses and varied sentence length.
 - Keep each language semantically equivalent. Translation may sound natural, but
   it must not add or remove medical meaning.
-- Keep each script compact: one hook, 2-3 body bullets, one safety caveat, one CTA.
+- Keep each script compact: one hook, 2-3 spoken body lines, one safety caveat, one CTA.
 - Keep all on-screen-ready text short enough for mobile subtitles.
 
 Return JSON with this exact top-level shape:
@@ -124,6 +174,8 @@ Return JSON with this exact top-level shape:
     {{
       "claim": "...",
       "evidence_from_expert_answer": "...",
+      "grounding_fact_indices": [0],
+      "citation_indices": [0],
       "appears_in_languages": ["english", "korean", "spanish"],
       "risk_level": "low|medium|high"
     }}
@@ -142,6 +194,10 @@ Question:
 
 Expert answer:
 {source.expert_answer_text}
+
+Grounding report:
+{grounding_text}
+{repair_text}
 """.strip()
 
 
