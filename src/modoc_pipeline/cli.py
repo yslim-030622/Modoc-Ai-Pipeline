@@ -515,6 +515,8 @@ def run_render_meme(args: argparse.Namespace) -> int:
         meme_plan = read_json(meme_plan_path)
         languages = parse_csv(args.languages)
         video_dir = video_output_dir_for_run(run_dir, Path(args.video_dir))
+        bgm_dir = run_dir / "meme_bgm"
+        bgm_dir = bgm_dir if bgm_dir.exists() and any(bgm_dir.iterdir()) else None
         print("Rendering meme slideshow videos...")
         rendered = render_meme_slideshow(
             run_dir=run_dir,
@@ -523,6 +525,7 @@ def run_render_meme(args: argparse.Namespace) -> int:
             video_output_dir=video_dir,
             languages=languages,
             zoom_enabled=not args.no_zoom,
+            bgm_dir=bgm_dir,
         )
         write_json(
             run_dir / "meme_status.json",

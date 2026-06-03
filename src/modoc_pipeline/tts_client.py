@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from google import genai
 from google.genai import types
@@ -71,9 +75,12 @@ def _synthesize(
     model: str,
     voice: str,
     language: str,
+    style_instruction: str = "",
 ) -> bytes:
     """Call Gemini TTS and return raw PCM bytes."""
-    style_prefix = LANGUAGE_NARRATION_STYLE.get(language, LANGUAGE_NARRATION_STYLE["english"])
+    style_prefix = style_instruction.strip() or LANGUAGE_NARRATION_STYLE.get(language, LANGUAGE_NARRATION_STYLE["english"])
+    if "내용:" not in style_prefix and "Content:" not in style_prefix and "Contenido:" not in style_prefix:
+        style_prefix = f"{style_prefix.strip()} Content: "
     prompt = f"{style_prefix}{text}"
     response = client.models.generate_content(
         model=model,
@@ -87,8 +94,46 @@ def _synthesize(
             ),
         ),
     )
-    return response.candidates[0].content.parts[0].inline_data.data
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        raise RuntimeError("Gemini TTS returned no candidates")
+    parts = getattr(candidates[0].content, "parts", None) or []
+    if not parts:
+        raise RuntimeError("Gemini TTS returned no audio parts")
+    data = parts[0].inline_data.data
+    if not data:
+        raise RuntimeError("Gemini TTS returned empty audio data")
+    return data
 
+
+
+_RETRY_DELAYS = (3.0, 8.0, 20.0)  # 3 attempts: wait 3s, then 8s, then 20s before giving up
+
+
+def _synthesize_with_retry(
+    client: genai.Client,
+    text: str,
+    *,
+    model: str,
+    voice: str,
+    language: str,
+    style_instruction: str = "",
+    scene_label: str = "",
+) -> bytes | None:
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
+        try:
+            return _synthesize(client, text, model=model, voice=voice, language=language, style_instruction=style_instruction)
+        except Exception as exc:
+            last_exc = exc
+            if delay is None:
+                break
+            log.warning("TTS %s attempt %d failed (%s) — retrying in %.0fs", scene_label, attempt, exc, delay)
+            print(f"  TTS {scene_label}: attempt {attempt} failed, retrying in {delay:.0f}s...")
+            time.sleep(delay)
+    log.warning("TTS %s gave up after %d attempts: %s", scene_label, len(_RETRY_DELAYS) + 1, last_exc)
+    print(f"  TTS {scene_label}: skipped after {len(_RETRY_DELAYS) + 1} attempts ({last_exc})")
+    return None
 
 
 def generate_meme_gemini_tts(
@@ -116,6 +161,7 @@ def generate_meme_gemini_tts(
             continue
 
         voice = MEME_LANGUAGE_VOICES.get(lang_key, LANGUAGE_VOICES.get(lang_key, config.voice_name))
+        tts_style = str(lang_plan.get("tts_style", "")).strip()
         lang_dir = output_dir / lang_key
         lang_dir.mkdir(parents=True, exist_ok=True)
         scene_paths: dict[str, Path] = {}
@@ -125,7 +171,17 @@ def generate_meme_gemini_tts(
             tts_text = str(scene.get("tts_text", "")).strip()
             if not tts_text or not scene_id:
                 continue
-            pcm = _synthesize(client, tts_text, model=config.model, voice=voice, language=lang_key)
+            pcm = _synthesize_with_retry(
+                client,
+                tts_text,
+                model=config.model,
+                voice=voice,
+                language=lang_key,
+                style_instruction=tts_style,
+                scene_label=f"{lang_key}/{scene_id}",
+            )
+            if pcm is None:
+                continue
             path = lang_dir / f"{scene_id}.wav"
             write_wave(path, pcm)
             scene_paths[scene_id] = path

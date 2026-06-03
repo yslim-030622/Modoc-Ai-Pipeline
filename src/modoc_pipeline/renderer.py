@@ -415,6 +415,7 @@ def render_meme_slideshow(
             raw_images_dir=lang_image_dir,
             baked_dir=baked_dir,
             language=lang_key,
+            caption_style=str(lang_plan.get("caption_style", "impact") or "impact"),
         )
         if not baked_images:
             raise RenderError(f"No baked images produced for {lang_key}.")
@@ -475,6 +476,7 @@ def bake_meme_text_onto_images(
     raw_images_dir: Path,
     baked_dir: Path,
     language: str,
+    caption_style: str = "impact",
 ) -> list[Path]:
     """Render top_text / bottom_text onto each scene PNG (Impact meme style).
 
@@ -498,9 +500,9 @@ def bake_meme_text_onto_images(
         bottom_text = str(scene.get("bottom_text", "")).strip()
 
         if top_text:
-            _draw_meme_text(draw, top_text, position="top", language=language)
+            _draw_meme_text(draw, top_text, position="top", language=language, caption_style=caption_style)
         if bottom_text:
-            _draw_meme_text(draw, bottom_text, position="bottom", language=language)
+            _draw_meme_text(draw, bottom_text, position="bottom", language=language, caption_style=caption_style)
 
         # Convert to RGB for JPEG-safe PNG output
         final = Image.new("RGB", img.size, (0, 0, 0))
@@ -538,6 +540,7 @@ def _draw_meme_text(
     *,
     position: str,
     language: str,
+    caption_style: str = "impact",
 ) -> None:
     """Draw Impact-style meme text with bounds-checked placement.
 
@@ -546,8 +549,8 @@ def _draw_meme_text(
     """
     max_text_w = _CANVAS_W - 80
 
-    # Auto-size: start at 80px, shrink until fits in ≤3 lines within safe zone
-    font_size = 80
+    # Auto-size: start style-appropriate, shrink until fits in ≤3 lines within safe zone
+    font_size = 72 if caption_style in {"clean_reels", "spanish_social"} else 80
     font = _load_meme_font(size=font_size, language=language)
     lines = wrap_text(draw, text, font, max_width=max_text_w)
 
@@ -585,11 +588,48 @@ def _draw_meme_text(
         line_w = bbox[2] - bbox[0]
         x = (_CANVAS_W - line_w) // 2
 
-        # 8-direction black outline for legibility on any background
-        for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-3, -3), (3, -3), (-3, 3), (3, 3)):
-            draw.text((x + dx, y + dy), line, font=font, fill=(0, 0, 0, 255))
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+        _draw_styled_text(draw, line, x=x, y=y, font=font, caption_style=caption_style)
         y += line_height
+
+
+def _draw_styled_text(
+    draw: ImageDraw.ImageDraw,
+    line: str,
+    *,
+    x: int,
+    y: int,
+    font: ImageFont.ImageFont,
+    caption_style: str,
+) -> None:
+    if caption_style == "clean_reels":
+        for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2), (-2, -2), (2, -2), (-2, 2), (2, 2)):
+            draw.text((x + dx, y + dy), line, font=font, fill=(0, 0, 0, 220))
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+        return
+
+    if caption_style == "korean_jjal":
+        bbox = draw.textbbox((x, y), line, font=font)
+        pad_x, pad_y = 24, 10
+        draw.rounded_rectangle(
+            (bbox[0] - pad_x, bbox[1] - pad_y, bbox[2] + pad_x, bbox[3] + pad_y),
+            radius=18,
+            fill=(255, 255, 255, 235),
+            outline=(20, 20, 20, 255),
+            width=3,
+        )
+        draw.text((x, y), line, font=font, fill=(20, 20, 20, 255))
+        return
+
+    if caption_style == "spanish_social":
+        for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-3, -3), (3, -3), (-3, 3), (3, 3)):
+            draw.text((x + dx, y + dy), line, font=font, fill=(70, 35, 20, 240))
+        draw.text((x, y), line, font=font, fill=(255, 244, 220, 255))
+        return
+
+    # Impact fallback: white meme text with heavy black outline.
+    for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-3, -3), (3, -3), (-3, 3), (3, 3)):
+        draw.text((x + dx, y + dy), line, font=font, fill=(0, 0, 0, 255))
+    draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
 
 
 def _load_meme_font(size: int, language: str) -> ImageFont.ImageFont:
@@ -731,24 +771,39 @@ def _find_meme_audio(
         return None
 
     combined = assets_dir / f"{lang_key}_combined_audio.wav"
+
+    # Single file: copy directly instead of going through concat demuxer.
+    if len(scene_audio) == 1:
+        import shutil
+        shutil.copy2(scene_audio[0], combined)
+        return combined if combined.exists() else None
+
     list_file = assets_dir / "audio_list.txt"
     list_file.write_text(
         "\n".join(f"file '{_escape_concat_path(p)}'" for p in scene_audio) + "\n",
         encoding="utf-8",
     )
-    subprocess.run(
+    # Re-encode to pcm_s16le so concat always succeeds regardless of WAV header quirks.
+    result = subprocess.run(
         [
             "ffmpeg", "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(list_file),
-            "-c", "copy",
+            "-c:a", "pcm_s16le",
             str(combined),
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         check=False,
     )
-    return combined if combined.exists() else None
+    if result.returncode != 0 or not combined.exists():
+        import logging
+        logging.getLogger(__name__).warning(
+            "TTS audio concat failed for %s (ffmpeg exit %d): %s",
+            lang_key, result.returncode, result.stderr.decode(errors="replace")[-300:],
+        )
+        return None
+    return combined
 
 
 def _assemble_meme_video(

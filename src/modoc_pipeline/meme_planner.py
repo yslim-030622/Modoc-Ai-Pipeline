@@ -239,9 +239,9 @@ Rules:
 - Each candidate must be medically safe, parent-facing, and culturally native.
 - Medical safety beats humor. Never use fear bait, diagnosis bait, or definitive reassurance.
 - English: use parent-realistic hooks like POV, Nobody warns you, parent at 2am, save this. Avoid overdone Gen-Z slang.
-- Korean: use 새벽 육아, 검색하다 더 불안, 맘카페/카톡 말투, 반전 짤. Do not hard-code a cute mint hoodie template.
-- Spanish: use Cuando..., Lo que nadie te explica..., El pediatra dijo... Avoid hard-coding "Mamá latina" as the only identity.
-- visual_style_anchor and character_sheet must be concrete enough for image consistency but not stereotyped.
+- Korean: use 새벽 육아, 검색하다 더 불안, 맘카페/카톡 말투, 반전 짤.
+- Spanish: use Cuando..., Lo que nadie te explica..., El pediatra dijo..., Mamá latina: format.
+- visual_style_anchor and character_sheet must be concrete and fully described for image consistency.
 - bgm_prompt must be instrumental-only social video music, with no artist names and no vocals.
 - BGM must match the medical seriousness. For symptoms, postpartum complications,
   swelling, blood pressure, blood clot concerns, diagnosis, or referral topics,
@@ -446,7 +446,27 @@ LANGUAGE FIELDS:
   the source script explicitly supports them.
 - English: parent-realistic, not try-hard Gen Z.
 - Korean: native Korean text, 새벽 육아/search anxiety/Kakao-like phrasing allowed.
-- Spanish: native Spanish text, warm discovery/relief tone; avoid using "Mamá latina" as the only template.
+- Spanish: native Spanish text, warm discovery/relief tone.
+
+PER-LANGUAGE VISUAL IDENTITY (use these locked designs for consistency):
+
+Korean:
+  - visual_style_anchor: "Cute flat 2D Korean webtoon illustration style, soft sage green and warm cream palette"
+  - character_sheet: "petite woman, warm ivory skin, shoulder-length straight black hair in a messy bun, oversized mint-green hoodie, light grey sweatpants, white ceramic mug in hand"
+  - caption_style: korean_jjal
+  - meme_format: "jjal"
+
+English:
+  - visual_style_anchor: "Modern flat 2D illustration style, bold teal and warm white palette"
+  - character_sheet: "tired millennial woman, light peach skin, shoulder-length brown hair in a high messy bun, oversized teal crewneck sweatshirt, black leggings, dark circles under eyes, white ceramic mug in hand"
+  - caption_style: impact
+  - meme_format: "pov"
+
+Spanish:
+  - visual_style_anchor: "Warm vibrant flat 2D illustration style, ochre and terracotta palette"
+  - character_sheet: "expressive Latina woman, warm golden-brown skin, voluminous curly dark brown hair past shoulders, floral terracotta blouse, jeans, large gold hoop earrings, coffee cup in hand"
+  - caption_style: spanish_social
+  - meme_format: "relatability"
 
 SAFETY: every medical fact in tts_text/bottom_text must trace to source scripts. No fear-based framing.
 source_topic: short English phrase.

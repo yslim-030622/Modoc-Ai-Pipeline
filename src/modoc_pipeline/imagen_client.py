@@ -89,9 +89,11 @@ def generate_meme_images(
                     reference_image_bytes=reference_image_bytes,
                 )
                 scene_paths[scene_id] = output_path
-                # Use scene 1 as visual reference for all subsequent scenes
+                # Lock the first successfully generated scene as the visual reference.
+                # All subsequent scenes receive this image to anchor character consistency.
                 if reference_image_bytes is None and output_path.exists():
                     reference_image_bytes = output_path.read_bytes()
+                    log.debug("Locked reference image from %s/%s", lang_key, scene_id)
             except Exception as exc:
                 log.warning("Image generation failed for %s/%s: %s", lang_key, scene_id, exc)
 
