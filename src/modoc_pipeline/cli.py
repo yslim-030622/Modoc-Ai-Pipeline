@@ -137,22 +137,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def add_source_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--input", default=DEFAULT_INPUT, help="Path to the Q&A Excel workbook.")
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for JSON run logs.")
-    parser.add_argument("--log-path", default=DEFAULT_LOG_PATH, help="CSV path for KPI timing logs.")
-    parser.add_argument("--row", type=int, help="Specific Excel row number to process.")
-    parser.add_argument(
-        "--status",
-        default="Published",
-        help="Status filter for source rows. Use 'any' to disable filtering.",
-    )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help="Gemini model name. Defaults to GEMINI_MODEL or gemini-3.5-flash-lite.",
-    )
-
 
 def add_quality_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-search", action="store_true", help="Skip Gemini Google Search grounding.")
