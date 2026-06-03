@@ -60,12 +60,24 @@ def write_success_artifacts(
     generation: dict[str, Any],
     raw_text: str,
     status: dict[str, Any],
+    grounding_report: dict[str, Any] | None = None,
+    quality_reports: dict[str, Any] | None = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     _write_json(run_dir / "source.json", source.to_dict())
     _write_json(run_dir / "scripts.json", generation.get("scripts", {}))
     _write_json(run_dir / "claims.json", generation.get("medical_claims", []))
-    _write_text(run_dir / "review_packet.md", build_review_packet(source, generation))
+    if grounding_report is not None:
+        _write_json(run_dir / "grounding_report.json", grounding_report)
+    _write_text(
+        run_dir / "review_packet.md",
+        build_review_packet(
+            source,
+            generation,
+            grounding_report=grounding_report,
+            quality_reports=quality_reports,
+        ),
+    )
     _write_json(run_dir / "status.json", status)
 
     # The successful raw response is useful when prompt changes affect output
@@ -86,7 +98,15 @@ def write_failure_artifacts(
     _write_json(run_dir / "status.json", status)
 
 
-def build_review_packet(source: QnaSource, generation: dict[str, Any]) -> str:
+def build_review_packet(
+    source: QnaSource,
+    generation: dict[str, Any],
+    *,
+    grounding_report: dict[str, Any] | None = None,
+    quality_reports: dict[str, Any] | None = None,
+    final_videos: list[dict[str, str]] | None = None,
+    visual_qa_reports: list[dict[str, Any]] | None = None,
+) -> str:
     scripts = generation.get("scripts", {})
     claims = generation.get("medical_claims", [])
     reviewer_notes = generation.get("reviewer_notes", [])
@@ -107,9 +127,40 @@ def build_review_packet(source: QnaSource, generation: dict[str, Any]) -> str:
         "",
         source.expert_answer_text,
         "",
-        "## Generated Scripts",
+        "## Grounding",
         "",
     ]
+
+    if grounding_report:
+        lines.extend(
+            [
+                f"- Status: {grounding_report.get('status', '')}",
+                f"- Search queries: {', '.join(grounding_report.get('search_queries', [])) or 'N/A'}",
+                "",
+                "### Citations",
+                "",
+            ]
+        )
+        for index, citation in enumerate(grounding_report.get("citations", []), start=1):
+            lines.append(f"{index}. {citation.get('title', '')}: {citation.get('uri', '')}")
+        lines.extend(["", "### Supported Facts", ""])
+        for index, fact in enumerate(grounding_report.get("supported_facts", []), start=1):
+            lines.append(f"{index}. {fact.get('fact', '')}")
+        unsupported = grounding_report.get("unsupported_or_unsafe_claims", [])
+        if unsupported:
+            lines.extend(["", "### Unsupported or Unsafe Claims", ""])
+            for item in unsupported:
+                lines.append(f"- {item}")
+        lines.append("")
+    else:
+        lines.extend(["Google Search grounding was not recorded for this run.", ""])
+
+    lines.extend(
+        [
+        "## Generated Scripts",
+        "",
+        ]
+    )
 
     for key in ("english", "korean", "spanish"):
         script = scripts.get(key, {})
@@ -147,11 +198,65 @@ def build_review_packet(source: QnaSource, generation: dict[str, Any]) -> str:
                 "",
                 f"- Claim: {claim.get('claim', '')}",
                 f"- Evidence: {claim.get('evidence_from_expert_answer', '')}",
+                f"- Grounding fact indices: {', '.join(str(i) for i in claim.get('grounding_fact_indices', [])) or 'N/A'}",
+                f"- Citation indices: {', '.join(str(i) for i in claim.get('citation_indices', [])) or 'N/A'}",
                 f"- Languages: {', '.join(claim.get('appears_in_languages', []))}",
                 f"- Risk level: {claim.get('risk_level', '')}",
                 "",
             ]
         )
+
+    lines.extend(["## Gemini Quality Gate", ""])
+    if quality_reports:
+        for stage, reports in quality_reports.items():
+            lines.extend([f"### {stage}", ""])
+            if isinstance(reports, list):
+                for report in reports:
+                    lines.append(
+                        f"- Attempt {report.get('attempt', '')}: "
+                        f"{report.get('status', '')} - {report.get('summary', '')}"
+                    )
+            else:
+                lines.append(f"- {reports}")
+            lines.append("")
+    else:
+        lines.extend(["No quality reports were recorded yet.", ""])
+
+    if visual_qa_reports:
+        lines.extend(["## Gemini Visual QA", ""])
+        for report in visual_qa_reports:
+            lines.extend(
+                [
+                    f"### {report.get('scene_id', '')}",
+                    "",
+                    f"- Status: {report.get('status', '')}",
+                    f"- Summary: {report.get('summary', '')}",
+                    f"- Random objects: {', '.join(report.get('detected_random_objects', [])) or 'None reported'}",
+                    f"- Forbidden elements: {', '.join(report.get('detected_forbidden_elements', [])) or 'None reported'}",
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["## Gemini Visual QA", "", "No visual QA reports were recorded.", ""])
+
+    if final_videos:
+        lines.extend(["## Final Videos", ""])
+        for item in final_videos:
+            lines.append(f"- {item.get('language', '')}: {item.get('path', '')}")
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Human Final Review Checklist",
+            "",
+            "- Watch every final MP4 end to end.",
+            "- Confirm captions match narration and are readable.",
+            "- Confirm no visible text, logo, watermark, or unwanted medical props appear in Veo clips.",
+            "- Confirm medical statements match the expert answer and cited grounding facts.",
+            "- Confirm the video is suitable for parent education before publishing.",
+            "",
+        ]
+    )
 
     lines.extend(["## Reviewer Notes", ""])
     for note in reviewer_notes:
@@ -193,4 +298,3 @@ def _write_json(path: Path, payload: Any) -> None:
 
 def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
-

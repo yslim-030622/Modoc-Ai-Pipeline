@@ -1,7 +1,7 @@
 # MoDoc AI Video Pipeline
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?logo=google&logoColor=white)
+![Gemini](https://img.shields.io/badge/Gemini-3.5_Flash_Lite-4285F4?logo=google&logoColor=white)
 ![Veo](https://img.shields.io/badge/Veo-3.1-34A853?logo=google&logoColor=white)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-rendering-007808?logo=ffmpeg&logoColor=white)
 
@@ -43,9 +43,9 @@ generate → plan-video → veo → tts → render
 
 | Stage | What Happens |
 |-------|-------------|
-| `generate` | Reads the Q&A row from Excel, calls Gemini 2.5 Flash to write scripts in English, Korean, and Spanish, and extracts a medical claims list for reviewer sign-off |
-| `plan-video` | Calls Gemini again to design 4 visual scenes — writing a detailed character bible, environment description, and Veo prompts that enforce visual consistency across clips |
-| `veo` | Calls Veo 3.1 to generate each clip. Each clip uses the previous clip's last frame as its first frame (frame continuation), so characters and environments stay consistent |
+| `generate` | Reads the Q&A row from Excel, uses Gemini Search grounding, writes parent-friendly scripts in English, Korean, and Spanish, and extracts medical claims for reviewer sign-off |
+| `plan-video` | Calls Gemini again to create scene contracts: narration source, muted-viewer visual goal, must-show objects, gentle meme beat, and concise Veo prompts |
+| `veo` | Generates run-level Gemini reference images, calls Veo 3.1, uses reference/last-frame continuation, and runs Gemini visual QA on sampled frames with scene-level retries |
 | `tts` | Calls Gemini TTS to narrate each scene individually — Korean with Kore voice, English with Puck, Spanish with Leda. Per-scene audio means no tempo compression |
 | `render` | Calls FFmpeg to extend each Veo clip to match its narration duration, concatenate clips, overlay captions timed to actual audio, and export the final MP4 |
 
@@ -55,8 +55,9 @@ generate → plan-video → veo → tts → render
 - Generating medically-cautious scripts in English, Korean, and Spanish
 - Extracting medical claims with source evidence for reviewer packets
 - Writing a Markdown review packet per run
-- Planning 4-scene Veo prompts with consistent character and environment descriptions
+- Planning 4-scene Veo prompts with a controlled mouthless MoDoc Guide and concrete infographic props
 - Generating Veo 3.1 clips with frame continuation for cross-clip visual consistency
+- Running Gemini visual QA against sampled Veo frames and regenerating failed scenes automatically
 - Per-scene TTS narration with language-specific voices (Kore, Puck, Leda)
 - Extending Veo clips to match narration duration (no speed compression)
 - Overlaying captions timed to actual audio per scene
@@ -66,17 +67,18 @@ generate → plan-video → veo → tts → render
 
 - Medical review — a clinician still needs to sign off before publishing
 - Publishing to YouTube, Instagram, and Facebook
-- Final quality check (hallucinations still happen occasionally — character drift, wrong objects)
+- Final publishing decision after reviewing the MP4 and review packet
 - View count collection for KPI tracking
 
 ## Tech Stack
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| Script generation | Gemini 2.5 Flash | Medical accuracy, multilingual quality, JSON-mode output |
+| Script generation | Gemini 3.5 Flash Lite + Google Search grounding | Medical accuracy, multilingual quality, structured output, source grounding |
+| Visual references | Gemini image generation | Run-level character/style anchor before Veo |
 | Video generation | Veo 3.1 (`veo-3.1-generate-preview`) | Best available 9:16 animated video quality |
-| Frame continuity | Veo image-to-video (last frame → next clip) | Prevents character drift across independently generated clips |
-| TTS narration | Gemini TTS (`gemini-2.5-flash-preview-tts`) | Per-scene generation eliminates audio compression artifacts |
+| Frame continuity | Veo image-to-video (reference/last frame → next clip) | Reduces character and style drift across independently generated clips |
+| TTS narration | Gemini TTS (`gemini-3.1-flash-tts-preview`) | Per-scene generation eliminates audio compression artifacts |
 | Language voices | Kore (Korean) · Puck (English) · Leda (Spanish) | Natural pronunciation per language |
 | Video assembly | FFmpeg | clip extension (tpad), caption overlay (RGBA), audio concat |
 | Source data | Excel via openpyxl | Reads existing Q&A spreadsheet as-is |
@@ -88,23 +90,24 @@ Q&A Blog Contents List.xlsx
          │
          ▼
   [generate] ──────────────────────────────────────────────────────────────
-  Gemini 2.5 Flash                                                         │
+  Gemini 3.5 Flash Lite + Google Search                                     │
   ├── scripts.json          (English / Korean / Spanish)                   │
   ├── claims.json           (medical claims + evidence)                    │
   └── review_packet.md      (clinician review aid)                         │
          │                                                                  │
          ▼                                                                  │
   [plan-video]                                                              │
-  Gemini 2.5 Flash                                                          │
-  ├── character_bible       (exact hair, skin, outfit — embedded in every prompt)
-  ├── environment_bible     (same room, same lighting in every prompt)      │
+  Gemini 3.5 Flash Lite                                                     │
+  ├── character_bible       (mouthless MoDoc Guide + palette + background)  │
+  ├── scene_contracts       (must-show/must-not-show + visual goal)         │
   ├── visual_scenes.json    (4 Veo prompts, shared across languages)        │
   └── localized_tracks.json (captions + TTS text per scene per language)   │
          │                                                                  │
          ▼                                                                  │
   [veo]                                                                     │
-  Veo 3.1                                                                   │
-  ├── scene_01.mp4  ← text only (fresh start)                              │
+  Gemini image + Veo 3.1 + Gemini visual QA                                 │
+  ├── references/character_reference.png                                    │
+  ├── scene_01.mp4  ← reference image when available                       │
   ├── scene_02.mp4  ← scene_01 last frame as first frame                  │
   ├── scene_03.mp4  ← scene_02 last frame as first frame                  │
   └── scene_04.mp4  ← scene_03 last frame as first frame                  │
@@ -151,12 +154,20 @@ brew install ffmpeg
 
 ```env
 GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_JUDGE_MODEL=gemini-3.5-flash-lite
+GEMINI_ENABLE_SEARCH=true
+GEMINI_VEO_MODEL=veo-3.1-generate-preview
 GEMINI_VEO_PERSON_GENERATION=allow_all
 GEMINI_VEO_GENERATE_AUDIO=false
 
-GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview
 GEMINI_TTS_VOICE=Kore
+GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
+VISUAL_STYLE=character-infographic
+VISUAL_QA=true
+MAX_VISUAL_RETRIES=2
+BGM_MODE=off
 ```
 
 ## Commands
@@ -207,6 +218,8 @@ scripts.json              — English / Korean / Spanish scripts
 claims.json               — Medical claims with evidence references
 review_packet.md          — Reviewer-ready Markdown document
 visual_scenes.json        — 4 Veo scene prompts with character + environment bibles
+visual_qa/                — Gemini frame QA reports per scene
+references/               — Gemini-generated character/style reference images
 localized_tracks.json     — Captions and TTS text per scene per language
 audio/{language}/         — Per-scene WAV files (scene_01.wav, scene_02.wav, …)
 veo/shared/               — Shared Veo clips + last-frame JPEGs for continuity

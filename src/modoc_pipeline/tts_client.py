@@ -19,9 +19,16 @@ class TtsConfig:
     voice_name: str
 
 
-# Language-specific voices for natural pronunciation.
-# Kore = Korean female, Puck = English male natural, Leda = Spanish female natural.
+# Voices chosen for warmth and conversational feel (2025 preferred list).
+# Fenrir = warm/approachable English, Kore = natural Korean, Aoede = expressive Spanish.
 LANGUAGE_VOICES: dict[str, str] = {
+    "korean": "Kore",
+    "english": "Fenrir",
+    "spanish": "Aoede",
+}
+
+# Meme pipeline voices — slightly more upbeat/energetic tone for short-form content.
+MEME_LANGUAGE_VOICES: dict[str, str] = {
     "korean": "Kore",
     "english": "Puck",
     "spanish": "Leda",
@@ -43,14 +50,16 @@ LANGUAGE_NARRATION_STYLE: dict[str, str] = {
 }
 
 
+DEFAULT_TTS_MODEL = "gemini-3.1-flash-tts-preview"
+
+
 def load_tts_config() -> TtsConfig:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise ValueError("GEMINI_API_KEY is missing from .env.")
     return TtsConfig(
         api_key=api_key,
-        model=os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts").strip()
-        or "gemini-2.5-flash-preview-tts",
+        model=os.getenv("GEMINI_TTS_MODEL", DEFAULT_TTS_MODEL).strip() or DEFAULT_TTS_MODEL,
         voice_name=os.getenv("GEMINI_TTS_VOICE", "Kore").strip() or "Kore",
     )
 
@@ -81,78 +90,51 @@ def _synthesize(
     return response.candidates[0].content.parts[0].inline_data.data
 
 
-def generate_tts_per_scene(
+
+def generate_meme_gemini_tts(
     *,
-    localized_tracks: dict[str, list[dict[str, Any]]],
+    meme_plan: dict[str, Any],
     output_dir: Path,
     config: TtsConfig,
     languages: set[str] | None = None,
 ) -> dict[str, dict[str, Path]]:
-    """Generate one WAV file per scene per language.
+    """Generate per-scene Gemini TTS WAV files from a MemePlan.
 
+    Reads tts_text from each MemeScene and synthesizes with Gemini TTS.
     Returns {language: {scene_id: wav_path}}.
-
-    Per-scene audio is the foundation for frame-accurate subtitle sync:
-    each Veo clip is extended (freeze last frame) to match its scene's audio
-    duration, so speech, subtitles, and video are aligned without any
-    tempo compression.
+    Skips scenes with empty tts_text.
     """
     client = genai.Client(api_key=config.api_key)
     output_dir.mkdir(parents=True, exist_ok=True)
     result: dict[str, dict[str, Path]] = {}
 
-    for language, scenes in localized_tracks.items():
-        if languages is not None and language not in languages:
+    for lang_key in ("english", "korean", "spanish"):
+        if languages is not None and lang_key not in languages:
             continue
-        voice = LANGUAGE_VOICES.get(language, config.voice_name)
-        lang_dir = output_dir / language
+        lang_plan = meme_plan.get(lang_key)
+        if not lang_plan:
+            continue
+
+        voice = MEME_LANGUAGE_VOICES.get(lang_key, LANGUAGE_VOICES.get(lang_key, config.voice_name))
+        lang_dir = output_dir / lang_key
         lang_dir.mkdir(parents=True, exist_ok=True)
         scene_paths: dict[str, Path] = {}
 
-        for scene in scenes:
-            scene_id = scene["scene_id"]
-            tts_text = str(scene.get("tts_text") or scene.get("caption_text") or "").strip()
-            if not tts_text:
+        for scene in lang_plan.get("scenes", []):
+            scene_id = scene.get("scene_id", "")
+            tts_text = str(scene.get("tts_text", "")).strip()
+            if not tts_text or not scene_id:
                 continue
-            pcm = _synthesize(client, tts_text, model=config.model, voice=voice, language=language)
+            pcm = _synthesize(client, tts_text, model=config.model, voice=voice, language=lang_key)
             path = lang_dir / f"{scene_id}.wav"
             write_wave(path, pcm)
             scene_paths[scene_id] = path
-            print(f"  TTS {language}/{scene_id}: {len(pcm)//48000:.1f}s audio")
+            print(f"  TTS {lang_key}/{scene_id}: {len(pcm) // 48000:.1f}s")
 
-        result[language] = scene_paths
+        if scene_paths:
+            result[lang_key] = scene_paths
 
     return result
-
-
-def generate_tts_audio(
-    *,
-    localized_tracks: dict[str, list[dict[str, Any]]],
-    output_dir: Path,
-    config: TtsConfig,
-    languages: set[str] | None = None,
-) -> dict[str, Path]:
-    """Legacy: generate one combined WAV per language. Used as fallback only."""
-    client = genai.Client(api_key=config.api_key)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    written: dict[str, Path] = {}
-
-    for language, scenes in localized_tracks.items():
-        if languages is not None and language not in languages:
-            continue
-        voice = LANGUAGE_VOICES.get(language, config.voice_name)
-        transcript = " ".join(
-            str(scene.get("tts_text") or scene.get("caption_text") or "").strip()
-            for scene in scenes
-        )
-        if not transcript.strip():
-            raise ValueError(f"No TTS text found for language: {language}")
-        pcm = _synthesize(client, transcript, model=config.model, voice=voice, language=language)
-        path = output_dir / f"{language}.wav"
-        write_wave(path, pcm)
-        written[language] = path
-
-    return written
 
 
 def write_wave(path: Path, pcm: bytes, channels: int = 1, rate: int = 24000, sample_width: int = 2) -> None:
