@@ -70,7 +70,9 @@ def generate_meme_images(
         scene_paths: dict[str, Path] = {}
 
         visual_style_anchor = str(lang_plan.get("visual_style_anchor", "")).strip()
+        character_sheet = str(lang_plan.get("character_sheet", "")).strip()
         scenes = lang_plan.get("scenes", [])
+        reference_image_bytes: bytes | None = None
         for idx, scene in enumerate(scenes):
             scene_id = scene.get("scene_id", f"scene_{idx + 1:02d}")
             output_path = lang_dir / f"{scene_id}.png"
@@ -83,8 +85,13 @@ def generate_meme_images(
                     scene=scene,
                     output_path=output_path,
                     visual_style_anchor=visual_style_anchor,
+                    character_sheet=character_sheet,
+                    reference_image_bytes=reference_image_bytes,
                 )
                 scene_paths[scene_id] = output_path
+                # Use scene 1 as visual reference for all subsequent scenes
+                if reference_image_bytes is None and output_path.exists():
+                    reference_image_bytes = output_path.read_bytes()
             except Exception as exc:
                 log.warning("Image generation failed for %s/%s: %s", lang_key, scene_id, exc)
 
@@ -103,11 +110,27 @@ def _generate_scene_image(
     scene: dict[str, Any],
     output_path: Path,
     visual_style_anchor: str = "",
+    character_sheet: str = "",
+    reference_image_bytes: bytes | None = None,
 ) -> None:
-    prompt = _build_image_prompt(scene, visual_style_anchor=visual_style_anchor)
+    prompt = _build_image_prompt(scene, visual_style_anchor=visual_style_anchor, character_sheet=character_sheet)
+
+    if reference_image_bytes is not None:
+        contents: Any = [
+            types.Part.from_bytes(data=reference_image_bytes, mime_type="image/png"),
+            types.Part.from_text(text=(
+                "Generate a new scene in the EXACT same art style and with the EXACT same character "
+                "(same face shape, hair, clothing, skin tone) as shown in the reference image above. "
+                "Only the pose, expression, action, and background change. "
+                + prompt
+            )),
+        ]
+    else:
+        contents = prompt
+
     response = client.models.generate_content(
         model=config.model,
-        contents=prompt,
+        contents=contents,
         config=types.GenerateContentConfig(
             response_modalities=["IMAGE"],
         ),
@@ -133,16 +156,19 @@ def _generate_scene_image(
     )
 
 
-def _build_image_prompt(scene: dict[str, Any], *, visual_style_anchor: str = "") -> str:
+def _build_image_prompt(scene: dict[str, Any], *, visual_style_anchor: str = "", character_sheet: str = "") -> str:
     base_prompt = scene.get("image_prompt", "").strip()
 
-    # If the planner forgot to include the anchor, inject it explicitly.
+    # Inject anchor + character_sheet if the planner omitted them
+    anchor_prefix = ""
     if visual_style_anchor and not base_prompt.startswith(visual_style_anchor[:40]):
-        base_prompt = f"{visual_style_anchor}. {base_prompt}"
+        anchor_prefix = visual_style_anchor
+    if character_sheet and character_sheet[:30] not in base_prompt:
+        anchor_prefix = f"{anchor_prefix}. {character_sheet}" if anchor_prefix else character_sheet
+    if anchor_prefix:
+        base_prompt = f"{anchor_prefix}. {base_prompt}"
 
-    no_text_prefix = (
-        "ABSOLUTELY NO text, words, letters, or signs in the image. "
-    )
+    no_text_prefix = "ABSOLUTELY NO text, words, letters, or signs in the image. "
     style_suffix = (
         "9:16 vertical. Flat 2D illustration style. "
         "No realistic human faces or children. No medical devices."

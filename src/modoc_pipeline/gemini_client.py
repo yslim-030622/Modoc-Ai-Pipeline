@@ -110,34 +110,22 @@ Hard constraints:
 - Return valid JSON only. Do not include Markdown fences.
 - Create scripts in English, Korean, and Spanish.
 - Each script must target 35 seconds or less.
-- Do not diagnose the child. Do not invent facts not present in the expert answer.
-- Do not introduce treatments, tests, causes, timelines, or risk factors that are
-  absent from the expert answer.
-- Avoid unsafe certainty. Use cautious language such as "can", "may", and
-  "ask a clinician" where appropriate.
+- Only use facts explicitly present in the expert answer. If a grounding report
+  is provided, supported_facts may also be used. Do not add diagnoses, treatments,
+  timelines, or risk factors that are absent from those sources.
+- Preserve the expert answer's uncertainty word-for-word. "Less likely" must not
+  become "safe" or "nothing to worry about". Use "can", "may", "ask a clinician".
 - Include a safety caveat when symptoms require medical attention.
-- Medical claims must be traceable to the expert answer text.
-- If Grounding report is provided, medical claims may also be traceable to a
-  listed supported_facts item. Do not use web information unless it appears in
-  supported_facts.
-- Preserve the expert answer's uncertainty. For example, "less likely" must not
-  become "not pneumonia", "not in the lungs", "safe", or "nothing to worry about".
-- Keep the parent-facing tone calm, direct, and non-sensational. Do not use fear
-  hooks, clickbait, or definitive reassurance.
-- Make the script sound like a short social video, not a blog paragraph.
+- Keep the parent-facing tone calm and direct. No fear hooks, clickbait, or
+  definitive reassurance beyond what the expert answer supports.
 - Structure every script for retention:
-  1) 0-2 second hook: a parent-recognizable question, misconception, or "wait, this can happen?" moment.
+  1) 0-2 second hook: a parent-recognizable question or "wait, this can happen?" moment.
   2) A gentle tension beat: myth-vs-fact, parent POV, or "the key detail is..." turn.
   3) A medically supported correction in plain spoken language.
   4) A calm safety caveat / CTA.
-- Add engagement through structure and rhythm, not drama. A tiny conversational
-  joke, gentle surprise, or relatable parent phrasing is allowed if it does not
-  add medical claims.
-- Avoid robotic reading. Use short spoken lines with natural pauses and varied sentence length.
-- Keep each language semantically equivalent. Translation may sound natural, but
-  it must not add or remove medical meaning.
-- Keep each script compact: one hook, 2-3 spoken body lines, one safety caveat, one CTA.
-- Keep all on-screen-ready text short enough for mobile subtitles.
+- Use short spoken lines with natural pauses. Sound like a social video, not a blog.
+- Keep each language semantically equivalent — same medical meaning, natural phrasing.
+- Keep each script compact: one hook, 2-3 body lines, one safety caveat, one CTA.
 
 Return JSON with this exact top-level shape:
 {{

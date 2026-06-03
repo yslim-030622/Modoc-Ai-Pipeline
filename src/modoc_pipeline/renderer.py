@@ -1195,12 +1195,13 @@ def _assemble_meme_concat_audio(
     scene_durations: list[float],
     output_path: Path,
     bgm_path: Path | None = None,
-    bgm_volume: float = 0.22,
+    bgm_volume: float = 0.32,
 ) -> None:
     """Assemble meme video: concat demuxer + atempo TTS + optional Lyria BGM mix + fade-to-black.
 
-    If bgm_path is provided, mixes BGM at bgm_volume (default 22%) under the TTS voiceover.
-    BGM is looped (-stream_loop -1) so it always covers the full video duration.
+    If bgm_path is provided, mixes BGM at bgm_volume under the TTS voiceover.
+    BGM fades in over 0.3s so it punches in immediately without a hard start.
+    BGM is looped so it always covers the full video duration.
     Both TTS and BGM fade out smoothly at the end.
     """
     total_dur = sum(scene_durations)
@@ -1217,8 +1218,8 @@ def _assemble_meme_concat_audio(
         fcomplex = (
             f"[0:v]fade=t=out:st={fade_out_start:.6f}:d=0.4[vout];"
             f"[1:a]atempo={MEME_SPEED_FACTOR}[tts_fast];"
-            f"[2:a]volume={bgm_volume},afade=t=out:st={fade_out_start:.6f}:d=0.5[bgm_faded];"
-            f"[tts_fast][bgm_faded]amix=inputs=2:duration=first[aout]"
+            f"[2:a]afade=t=in:st=0:d=0.3,volume={bgm_volume},afade=t=out:st={fade_out_start:.6f}:d=0.5[bgm_faded];"
+            f"[tts_fast][bgm_faded]amix=inputs=2:duration=first:normalize=0[aout]"
         )
         command = [
             "ffmpeg", "-y",

@@ -198,11 +198,11 @@ ENGAGEMENT STYLE:
   - Add a soft retention beat in every scene: gentle surprise, myth-vs-fact, parent POV, or tiny visual joke.
   - Keep it parent-friendly and calm. No fear hooks and no exaggerated medical certainty.
 
-CAMERA vocabulary — use these exact terms (Veo 3.1 responds to cinematography language):
-  scene_01 → "static camera, slow dolly-in, wide vertical composition"
-  scene_02 → "camera pans left to right, split composition"
-  scene_03 → "static camera, centered composition, slow reveal"
-  scene_04 → "camera slowly pulls back, clean vertical composition"
+CAMERA vocabulary — assign one per scene, vary across scenes (Veo 3.1 responds to cinematography language):
+  "static camera, slow dolly-in, wide vertical composition"
+  "camera pans left to right, split composition"
+  "static camera, centered composition, slow reveal"
+  "camera slowly pulls back, clean vertical composition"
 
 VISUAL CONTINUITY:
   - Same faceless MoDoc guide marker, same props, same warm off-white paper texture across all scenes

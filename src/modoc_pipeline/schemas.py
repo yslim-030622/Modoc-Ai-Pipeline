@@ -199,6 +199,7 @@ class MemeLangPlan(BaseModel):
     cultural_context: str
     trending_hooks: list[str] = Field(min_length=1, max_length=5)
     visual_style_anchor: str  # shared art style + character + palette applied to ALL scenes
+    character_sheet: str  # locked character description: exact hair, clothing, skin tone, body shape — repeated verbatim in every scene prompt
     scenes: list[MemeScene] = Field(min_length=3, max_length=5)
 
 

@@ -205,16 +205,25 @@ STORY ARC (4 scenes):
   Scene 3 INSIGHT: the "wait, really?!" medical truth — surprising, reassuring
   Scene 4 RELIEF: simple action + warm close — leaves parent feeling empowered
 
-VISUAL CONSISTENCY (critical):
-Define one visual_style_anchor per language. Include: exact art style, 2-3 color names, main character look, setting.
-All 4 scene image_prompts MUST start with this anchor. Scenes 2-4 say "Same character as scene 1, now [different emotion/action]."
+VISUAL CONSISTENCY (critical — this is the #1 quality issue):
+Define one visual_style_anchor AND one character_sheet per language.
+
+character_sheet = locked character description used VERBATIM in every scene prompt.
+It must include ALL of:
+  - exact hair: color, length, style (e.g. "shoulder-length wavy black hair in a loose bun")
+  - exact clothing: color, type, pattern (e.g. "oversized grey hoodie, dark blue joggers")
+  - skin tone (e.g. "warm light beige skin")
+  - body shape / build (e.g. "petite, slightly rounded face")
+  - defining prop (e.g. "always holding a white ceramic mug")
+Example: "petite woman, warm light beige skin, shoulder-length wavy black hair in a loose bun, oversized grey hoodie, dark blue joggers, white ceramic mug in hand"
 
 IMAGE PROMPT RULES:
+- Every scene prompt MUST open with: "[visual_style_anchor]. [character_sheet full text]. [new action/emotion this scene]."
 - ZERO text, letters, signs in the image — pure illustration
 - Describe the EMOTIONAL MOMENT: expression, body language, action, lighting
-- Good: "[anchor] Same exhausted mom from scene 1, now jaw-dropped pointing at phone, shocked expression, blue phone glow, 3am bedroom"
-- Bad: "background with bold colors" or "parent with baby" (too vague)
-- Max 80 words. No realistic faces. No medical equipment. 9:16 vertical.
+- Good: "[anchor]. [character_sheet]. Now jaw-dropped, pointing at phone with free hand, blue phone glow, dark 3am bedroom."
+- Bad: "Same character as scene 1" (useless — model has no memory), "background with bold colors" (too vague)
+- Max 90 words. No realistic faces. No medical equipment. 9:16 vertical.
 
 TEXT (displayed over image — keep SHORT and PUNCHY):
 - top_text: ≤ 6 words label or "" — cultural format label (see below)
@@ -222,29 +231,32 @@ TEXT (displayed over image — keep SHORT and PUNCHY):
 - tts_text: ONE spoken sentence, ≤ 10 words, warm and quick — medically accurate
 
 KOREAN style (바이럴 짤방):
-- Use 반전 (plot twist) format: starts relatable, ends with surprising medical truth
 - meme_format: "jjal" or "caption_only"
+- 반전 format: starts relatable, ends with surprising medical truth
 - All text in Korean
-- top_text examples: "새벽 2시 엄마:", "소아과 가기 전:", "육아 꿀팁:"
-- bottom_text: conversational Korean, like texting a friend — "이거 진짜야?" style
-- visual_style_anchor: cute flat 2D Korean webtoon style, soft sage green and warm cream palette, tired young Korean mom in grey hoodie
+- top_text: "새벽 2시 엄마:", "소아과 가기 전:", "육아 꿀팁:" style
+- bottom_text: texting-a-friend Korean — "이거 진짜야?" tone
+- visual_style_anchor: cute flat 2D Korean webtoon style, soft sage green and warm cream palette
+- character_sheet: generate a locked description for a petite young Korean woman. Include: warm ivory skin, shoulder-length straight black hair in a messy bun, oversized mint-green hoodie, light grey sweatpants, holding a white ceramic mug
 - tts_text: 자연스럽고 빠른 어투, 10단어 이내
 
 ENGLISH style (TikTok/Reels viral):
-- Use "Nobody tells you...", "POV:", or "Hot take:" formats
 - meme_format: "pov" or "reaction"
-- top_text examples: "POV:", "Hot take:", "Nobody warns you:"
-- bottom_text: self-aware Gen Z/millennial parent tone, slightly snarky then warm
-- visual_style_anchor: modern flat illustration, bold teal and warm white palette, tired millennial mom in messy bun and oversized sweater, cozy apartment
+- "POV:", "Hot take:", or "Nobody warns you:" format
+- top_text: "POV:", "Hot take:", "Nobody warns you:" style
+- bottom_text: Gen Z/millennial parent tone — slightly snarky then warm
+- visual_style_anchor: modern flat illustration, bold teal and warm white palette
+- character_sheet: generate a locked description for a tired millennial woman. Include: light peach skin, shoulder-length brown hair in a high messy bun, oversized teal crewneck sweatshirt, black leggings, dark circles under eyes
 - tts_text: casual friend voice, ≤ 10 words
 
 SPANISH style (TikTok Latino viral):
-- Use "Cuando el doctor dice..." or "Mamá latina detected:" format — humor in gap between home remedy and medical advice
 - meme_format: "relatability"
+- "Cuando el doctor dice..." or "Mamá latina:" format
 - All text in Spanish
-- top_text examples: "Cuando:", "Mamá latina:", "El pediatra dice:"
-- bottom_text: warm community voice, validates the mom's instinct while sharing fact
-- visual_style_anchor: warm vibrant flat illustration, ochre and terracotta palette, expressive Latina mom with curly dark hair, warm colorful home
+- top_text: "Cuando:", "Mamá latina:", "El pediatra dice:" style
+- bottom_text: warm community voice — validates the mom's instinct while sharing the fact
+- visual_style_anchor: warm vibrant flat illustration, ochre and terracotta palette
+- character_sheet: generate a locked description for an expressive Latina woman. Include: warm golden-brown skin, voluminous curly dark brown hair past shoulders, floral terracotta blouse, jeans, large gold hoop earrings
 - tts_text: cálido y rápido, ≤ 10 palabras
 
 SAFETY: every medical fact in tts_text/bottom_text must trace to source scripts. No fear-based framing.
