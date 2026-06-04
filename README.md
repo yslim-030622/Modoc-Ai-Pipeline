@@ -20,14 +20,6 @@ This pipeline does all of it from one command. Give it a row number from the Q&A
   <img src="docs/images/row24_spanish_02.jpg" width="185" alt="Spanish scene 2" />
 </p>
 
-<p align="center">
-  <img src="docs/images/row24_english_03.jpg" width="185" alt="English scene 3" />
-  &nbsp;
-  <img src="docs/images/row24_korean_03.jpg" width="185" alt="Korean scene 3" />
-  &nbsp;
-  <img src="docs/images/row24_spanish_03.jpg" width="185" alt="Spanish scene 3" />
-</p>
-
 <p align="center"><em>English &nbsp;·&nbsp; Korean &nbsp;·&nbsp; Spanish — same pipeline run, different format and character per language</em></p>
 
 ## How It Works
