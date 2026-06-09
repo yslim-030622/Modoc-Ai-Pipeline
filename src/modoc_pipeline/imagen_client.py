@@ -295,7 +295,7 @@ def _build_image_prompt(scene: dict[str, Any], *, visual_style_anchor: str = "",
     no_text_prefix = "ABSOLUTELY NO text, words, letters, or signs in the image. "
     style_suffix = (
         "9:16 vertical. Flat 2D illustration style. "
-        "No realistic human faces. Do not add props beyond the scene prompt."
+        "Do not add props beyond the scene prompt."
     )
 
     return " ".join(p for p in [no_text_prefix, base_prompt, style_suffix] if p)

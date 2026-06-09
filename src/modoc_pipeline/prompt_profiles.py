@@ -60,7 +60,7 @@ DEFAULT_CAMPAIGN_PROFILE: dict[str, Any] = {
     ],
     "image_guardrails": [
         "No visible text, letters, logos, or signs in generated images.",
-        "No realistic human faces, no children, no medical devices.",
+        "No visible medical devices or clinical equipment.",
         "9:16 vertical illustration suitable for short-form video.",
     ],
     "banned_templates": [

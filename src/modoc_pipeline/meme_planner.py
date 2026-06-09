@@ -756,7 +756,7 @@ IMAGE PROMPT RULES:
 - Bad: four scenes of the caregiver standing still with the same mug or phone.
 - Bad: balance scale, blood drop, plant/leaf symbol, traffic light, numbered calendar,
   lab report, medical chart, icon labels, or any text inside the image.
-- Max 90 words. No realistic faces. No children shown clearly. 9:16 vertical.
+- Max 90 words. 9:16 vertical.
 - Do not add dark circles, exhausted features, messy-night imagery, or 3am bedroom
   scenes unless the source script specifically needs a night scenario.
 
