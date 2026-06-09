@@ -462,13 +462,13 @@ Rules:
 - Prefer one reusable video-level caregiver identity across all languages. Keep
   character_sheet neutral and well-rested unless the source medical script
   specifically requires fatigue or a night scenario.
-- bgm_prompt should be short and lightly specified: bright short-form instrumental,
-  clean groove, catchy first bar, parent-friendly energy, no vocals, and room for voiceover.
-- BGM should support retention without darkening the medical content. For serious
-  medical topics, use bright, clean, calm-but-upbeat music rather than somber
-  low-density underscore.
+- bgm_prompt should specify a trending, upbeat short-form style: ukulele, claps, light percussion,
+  bouncy indie-pop or Latin-pop, immediate catchy hook in the first 2 seconds, cheerful viral energy.
+  No vocals, no humming, no lyrics, room for voiceover. Avoid generic "parent-friendly" clichés.
+- BGM must feel like a trending TikTok/Reels track — bright, bouncy, and instantly engaging.
+  For serious medical topics, stay upbeat and cheerful; never go somber or dark.
 - bgm_config must include bpm, density, brightness, guidance, temperature.
-- Prefer bpm 108-118, density 0.66-0.74, brightness 0.76-0.84, guidance 3.0-4.0.
+- Prefer bpm 116-122, density 0.62-0.68, brightness 0.90-0.96, guidance 3.3-3.8.
 - scene_beats must be exactly 4 short beats: hook, tension, insight, relief.
 - Captions must not mention unsupported home remedies, folk treatments, emergency
   rooms, or urgent care unless those concepts appear in the medical script.
@@ -780,10 +780,10 @@ TEXT (displayed over image — keep SHORT and PUNCHY):
 LANGUAGE FIELDS:
 - Fill creative_angle, trend_rationale, caption_style, tts_style, bgm_prompt, bgm_config, avoid_cliches from the selected candidate.
 - caption_style must be one of: impact, clean_reels, korean_jjal, spanish_social.
-- bgm_prompt must be concise: bright short-form instrumental, no vocals, no humming, no artist names, room for voiceover.
-- bgm_config should fit the selected BGM prompt.
-- For serious medical topics, BGM should stay clean and voiceover-safe while
-  remaining bright, optimistic, and calm-but-upbeat.
+- bgm_prompt must sound like a trending TikTok/Reels track: ukulele, claps, bouncy indie-pop or Latin-pop,
+  immediate hook in the first 2 seconds. No vocals, no humming, no artist names, room for voiceover.
+- bgm_config should fit the selected BGM prompt: prefer bpm 116-122, brightness 0.90-0.96, density 0.62-0.68.
+- For ALL topics including serious medical ones, BGM must stay bright, bouncy, and cheerful — never somber.
 - Captions must not add unsupported urgency or remedies. Do not mention emergency
   rooms, urgent care, alcohol/romero, massage, 호박즙, or other folk remedies unless
   the source script explicitly supports them.

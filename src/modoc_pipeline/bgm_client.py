@@ -34,18 +34,21 @@ DEFAULT_STREAM_TIMEOUT_SECONDS = 45.0
 # produce dark, timid underscore.
 LANGUAGE_BGM_PROMPTS: dict[str, str] = {
     "korean": (
-        "Bright Korean short-form instrumental at 114 BPM. "
-        "Clean pop groove, light percussion, warm keys, catchy first bar, optimistic parent-friendly energy. "
+        "Upbeat Korean short-form instrumental at 118 BPM. "
+        "Trendy indie-pop groove, ukulele strum, finger snaps, light claps, bouncy piano, immediate catchy hook in first 2 seconds. "
+        "Bright cheerful energy, feels like a viral parenting Reels track. "
         "No vocals, no lyrics, leave room for voiceover."
     ),
     "english": (
-        "Bright upbeat short-form instrumental at 116 BPM. "
-        "Light pop groove, clean percussion, warm keys, catchy first bar, optimistic parent-friendly energy. "
+        "Upbeat viral short-form instrumental at 120 BPM. "
+        "Bright indie-pop, ukulele, claps, light percussion, warm piano hook, immediate energy from the first beat. "
+        "Feels like a trending TikTok parenting track — cheerful, bouncy, optimistic. "
         "No vocals, no lyrics, leave room for voiceover."
     ),
     "spanish": (
-        "Bright Spanish-language short-form instrumental at 112 BPM. "
-        "Clean Latin-pop pulse, soft guitar, light percussion, warm keys, optimistic parent-friendly energy. "
+        "Upbeat Latin short-form instrumental at 116 BPM. "
+        "Bright Latin-pop, acoustic guitar strum, claps, light congas, warm keys, catchy hook from the first beat. "
+        "Cheerful and energetic, feels like a viral parenting Reels track. "
         "No vocals, no lyrics, leave room for voiceover."
     ),
 }
@@ -53,27 +56,27 @@ LANGUAGE_BGM_PROMPTS: dict[str, str] = {
 
 LANGUAGE_BGM_CONFIG: dict[str, types.LiveMusicGenerationConfig] = {
     "korean": types.LiveMusicGenerationConfig(
-        bpm=114,
-        temperature=1.0,
-        guidance=3.2,
-        density=0.70,
-        brightness=0.80,
+        bpm=118,
+        temperature=1.1,
+        guidance=3.5,
+        density=0.65,
+        brightness=0.92,
         music_generation_mode=types.MusicGenerationMode.QUALITY,
     ),
     "english": types.LiveMusicGenerationConfig(
-        bpm=116,
-        temperature=1.0,
-        guidance=3.2,
-        density=0.72,
-        brightness=0.82,
+        bpm=120,
+        temperature=1.1,
+        guidance=3.5,
+        density=0.65,
+        brightness=0.94,
         music_generation_mode=types.MusicGenerationMode.QUALITY,
     ),
     "spanish": types.LiveMusicGenerationConfig(
-        bpm=112,
-        temperature=1.0,
-        guidance=3.2,
-        density=0.70,
-        brightness=0.82,
+        bpm=116,
+        temperature=1.1,
+        guidance=3.5,
+        density=0.65,
+        brightness=0.92,
         music_generation_mode=types.MusicGenerationMode.QUALITY,
     ),
 }
