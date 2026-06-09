@@ -104,6 +104,7 @@ def generate_meme_images(
                         image_path=output_path,
                         scene=scene,
                         visual_brief=visual_brief,
+                        character_sheet=character_sheet,
                     )
                     if review.get("status") == "failed":
                         log.warning(
@@ -129,6 +130,7 @@ def generate_meme_images(
                                 image_path=output_path,
                                 scene=scene,
                                 visual_brief=visual_brief,
+                                character_sheet=character_sheet,
                             )
                             if review.get("status") != "failed":
                                 break
@@ -220,8 +222,10 @@ def _review_scene_image(
     image_path: Path,
     scene: dict[str, Any],
     visual_brief: dict[str, Any],
+    character_sheet: str = "",
 ) -> dict[str, Any]:
     try:
+        character_sheet = character_sheet or str(scene.get("character_sheet", "")).strip()
         prompt = f"""
 Review this generated illustration for a pediatric short-form video scene.
 
@@ -230,6 +234,9 @@ Scene JSON:
 
 Row-specific visual brief:
 {visual_brief}
+
+Character sheet (must be consistent across all scenes):
+{character_sheet}
 
 Return JSON only:
 {{
@@ -243,9 +250,12 @@ Fail if:
 - it uses forbidden visuals from the visual brief;
 - it does not show the scene_visual_action or primary_prop;
 - it adds irrelevant generic filler instead of row-specific visual anchors;
-- it is nearly the same static pose/prop/background as a generic caregiver scene.
+- it is nearly the same static pose/prop/background as a generic caregiver scene;
+- a child appears but their gender differs from the character_sheet (e.g. girl described but boy shown, or vice versa);
+- a child's hair color, hair style, or clothing color visibly differs from the character_sheet;
+- a child appears to be in distress, pain, fear, or receiving medical treatment.
 
-Pass only if the image is text-free, content-specific, safe, and visually coherent.
+Pass only if the image is text-free, content-specific, safe, visually coherent, and all characters match the character_sheet.
 """.strip()
         response = client.models.generate_content(
             model=config.review_model,

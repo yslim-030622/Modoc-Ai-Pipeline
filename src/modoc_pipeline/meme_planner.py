@@ -669,14 +669,24 @@ localized videos. Only diverge if the campaign profile explicitly asks for
 language-specific characters.
 
 character_sheet = stable character description used VERBATIM in every scene prompt.
-It must include ALL of:
+If the video features both a caregiver and a child, character_sheet MUST describe BOTH separately and lock ALL of the following:
+
+For the caregiver:
   - exact hair: color, length, style (e.g. "shoulder-length wavy black hair in a loose bun")
   - exact clothing: color, type, pattern (e.g. "oversized grey hoodie, dark blue joggers")
   - skin tone (e.g. "warm light beige skin")
   - body shape / build (e.g. "petite, slightly rounded face")
-It must NOT include props, backgrounds, actions, emotions, or phrases like
-"always holding..." because those belong to individual scenes.
-Example: "petite adult caregiver, warm light beige skin, shoulder-length wavy black hair in a loose bun, oversized sage cardigan, white shirt, olive trousers"
+
+For the child (if appearing in any scene):
+  - gender: explicitly state "girl" or "boy" — NEVER leave ambiguous
+  - approximate age range (e.g. "toddler around 2 years old", "school-age girl around 6")
+  - exact hair: color, length, style (e.g. "short curly black hair")
+  - exact clothing: color, type (e.g. "pastel yellow long-sleeve top, white pants")
+  - skin tone matching caregiver family
+
+These descriptions must be IDENTICAL across all 4 scenes and all languages.
+It must NOT include props, backgrounds, actions, emotions, or phrases like "always holding..." because those belong to individual scenes.
+Example with child: "petite adult caregiver, warm light beige skin, shoulder-length wavy black hair in a loose bun, oversized sage cardigan, white shirt, olive trousers; toddler girl around 2 years old, warm light beige skin, short wavy black hair, pastel yellow top, white pants"
 
 VISUAL SCENE WORKFLOW:
 Before writing any language scene, use the Row-specific visual brief as the
@@ -748,6 +758,7 @@ VISUAL VARIETY:
 
 IMAGE PROMPT RULES:
 - Every scene prompt MUST open with: "[visual_style_anchor]. [character_sheet full text]. [new action/emotion this scene]."
+- CHARACTER CONSISTENCY IS MANDATORY: every scene must describe the child with the EXACT same gender, age, hair, clothing, and skin tone from character_sheet. Never switch girl↔boy or change hair/outfit between scenes.
 - ZERO text, letters, signs in the image — pure illustration
 - Describe a concrete scene: shot type, composition, ordinary prop, action,
   background, and calm expression.
