@@ -5,10 +5,18 @@ from pathlib import Path
 
 from modoc_pipeline.cli import build_parser
 from modoc_pipeline.dashboard import build_runs_payload
-from modoc_pipeline.meme_planner import _parse_candidate_set, _parse_meme_plan, _parse_score_set
+from modoc_pipeline.meme_planner import (
+    _build_candidate_prompt,
+    _build_plan_prompt,
+    _build_visual_brief_prompt,
+    _parse_candidate_set,
+    _parse_meme_plan,
+    _parse_score_set,
+)
 import modoc_pipeline.orchestration.graph as graph_module
 from modoc_pipeline.orchestration.nodes import route_after_failure
 from modoc_pipeline.orchestration.state import PipelineState, ReviewReport
+from modoc_pipeline.prompt_profiles import load_campaign_profile
 from modoc_pipeline.reviewers import (
     deterministic_creative_report,
     deterministic_meme_text_report,
@@ -89,15 +97,15 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertIn("creative_angle", joined)
         self.assertIn("medical_safety", joined)
 
-    def test_creative_review_rejects_playful_bgm_for_serious_topic(self):
+    def test_creative_review_allows_bright_bgm_but_rejects_missing_instrumental_guardrail(self):
         plan = {
             "english": {
                 "creative_angle": "Parent notices postpartum swelling",
                 "trend_rationale": "Real parent concern",
                 "caption_style": "clean_reels",
                 "tts_style": "calm",
-                "bgm_prompt": "Festive reggaeton party beat with a huge drop",
-                "bgm_config": {"density": 0.82, "brightness": 0.9},
+                "bgm_prompt": "Bright short-form pop groove with a catchy first bar",
+                "bgm_config": {"density": 0.72, "brightness": 0.82},
                 "scenes": [
                     {"caption_role": "hook"},
                     {"caption_role": "tension"},
@@ -110,7 +118,7 @@ class AgenticOrchestrationTests(unittest.TestCase):
                 "trend_rationale": "현실 육아",
                 "caption_style": "korean_jjal",
                 "tts_style": "calm",
-                "bgm_prompt": "Gentle piano",
+                "bgm_prompt": "Bright instrumental pop groove, no vocals",
                 "bgm_config": {"density": 0.55, "brightness": 0.62},
                 "scenes": [
                     {"caption_role": "hook"},
@@ -124,7 +132,7 @@ class AgenticOrchestrationTests(unittest.TestCase):
                 "trend_rationale": "realidad",
                 "caption_style": "spanish_social",
                 "tts_style": "calm",
-                "bgm_prompt": "Gentle guitar",
+                "bgm_prompt": "Bright instrumental guitar groove, no vocals",
                 "bgm_config": {"density": 0.55, "brightness": 0.62},
                 "scenes": [
                     {"caption_role": "hook"},
@@ -143,7 +151,9 @@ class AgenticOrchestrationTests(unittest.TestCase):
         report = deterministic_creative_report(plan, scores, scripts=scripts)
 
         self.assertEqual(report.status, "failed")
-        self.assertIn("BGM", " ".join(issue.issue for issue in report.issues))
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertIn("instrumental", joined)
+        self.assertNotIn("too playful", joined)
 
     def test_meme_text_review_rejects_unsupported_urgency_remedies_and_stereotypes(self):
         scripts = {"english": {"body": ["Ask your doctor about an ultrasound."]}}
@@ -185,6 +195,11 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertEqual(args.rows, [24])
         self.assertTrue(args.skip_search)
 
+    def test_generate_parser_accepts_campaign_profile(self):
+        parser = build_parser()
+        args = parser.parse_args(["generate", "24", "--campaign-profile", "profiles/current.json"])
+        self.assertEqual(args.campaign_profile, "profiles/current.json")
+
     def test_generate_parser_defaults(self):
         parser = build_parser()
         args = parser.parse_args(["generate", "24"])
@@ -198,6 +213,141 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertEqual(args.command, "dashboard")
         self.assertEqual(args.host, "localhost")
         self.assertEqual(args.port, 8765)
+
+    def test_meme_prompts_do_not_force_legacy_locked_templates(self):
+        visual_brief_prompt = _build_visual_brief_prompt(
+            scripts={"english": {"body": ["Use only the supported facts."]}},
+            topic="pediatric health",
+        )
+        candidate_prompt = _build_candidate_prompt(
+            scripts={"english": {"body": ["Use only the supported facts."]}},
+            topic="pediatric health",
+            trends={"english": [], "korean": [], "spanish": []},
+            visual_brief={"content_type": "fever_triage", "allowed_props": ["blank digital thermometer"]},
+        )
+        plan_prompt = _build_plan_prompt(
+            scripts={"english": {"body": ["Use only the supported facts."]}},
+            topic="pediatric health",
+            trends_json="{}",
+            candidates={"english": [], "korean": [], "spanish": []},
+            scores={"english": [], "korean": [], "spanish": []},
+            visual_brief={"content_type": "fever_triage", "allowed_props": ["blank digital thermometer"]},
+        )
+
+        combined = f"{visual_brief_prompt}\n{candidate_prompt}\n{plan_prompt}"
+        self.assertNotIn("Mamá latina: format", combined)
+        self.assertNotIn("dark circles under eyes", combined)
+        self.assertNotIn("use 새벽 육아", combined)
+        self.assertIn("one video-level caregiver", combined)
+        self.assertIn("ContentVisualBrief", combined)
+        self.assertIn("content_type", combined)
+        self.assertIn("fever_triage", combined)
+        self.assertIn("VISUAL SCENE WORKFLOW", combined)
+        self.assertIn("scene_visual_action", combined)
+        self.assertIn("shot_type", combined)
+        self.assertIn("Do not make medical infographics", combined)
+
+    def test_visual_prompt_validation_rejects_repetitive_scene_plans(self):
+        scenes = []
+        for index, role in enumerate(("hook", "tension", "insight", "relief"), start=1):
+            scenes.append(
+                {
+                    "scene_id": f"scene_{index:02d}",
+                    "caption_role": role,
+                    "medical_message": "Supported medical message.",
+                    "scene_visual_action": "Caregiver holding the same mug.",
+                    "safe_props": ["warm mug"],
+                    "shot_type": "medium_action",
+                    "primary_prop": "warm mug",
+                    "background": "sunlit kitchen",
+                    "image_prompt": (
+                        "modern flat illustration. stable caregiver character. "
+                        "Caregiver standing still, holding the warm mug in a sunlit kitchen."
+                    ),
+                }
+            )
+        report = deterministic_visual_prompt_report(
+            {
+                "english": {
+                    "visual_style_anchor": "modern flat illustration",
+                    "character_sheet": "stable caregiver character",
+                    "scenes": scenes,
+                }
+            }
+        )
+
+        self.assertEqual(report.status, "failed")
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertIn("primary_prop", joined)
+        self.assertIn("shot_type", joined)
+
+    def test_visual_prompt_validation_uses_content_specific_allowed_props(self):
+        anchor = "modern flat illustration"
+        character = "stable caregiver character"
+        valid_scene = {
+            "scene_id": "scene_01",
+            "caption_role": "hook",
+            "medical_message": "Check fever calmly.",
+            "scene_visual_action": "Caregiver checks a blank thermometer near a water cup.",
+            "safe_props": ["blank digital thermometer", "water cup"],
+            "shot_type": "close_up",
+            "primary_prop": "blank digital thermometer",
+            "background": "kitchen table",
+            "image_prompt": (
+                f"{anchor}. {character}. Close-up at a kitchen table, caregiver holding "
+                "a blank digital thermometer beside a water cup, calm posture, blank display."
+            ),
+        }
+        filler_scene = {
+            **valid_scene,
+            "scene_id": "scene_02",
+            "safe_props": ["potted plant"],
+            "primary_prop": "potted plant",
+            "image_prompt": (
+                f"{anchor}. {character}. Medium shot watering a potted plant by a sunny window."
+            ),
+        }
+        report = deterministic_visual_prompt_report(
+            {
+                "visual_brief": {
+                    "content_type": "fever_triage",
+                    "allowed_props": ["blank digital thermometer", "water cup", "phone"],
+                    "forbidden_visuals": ["thermometer numbers"],
+                },
+                "english": {
+                    "visual_style_anchor": anchor,
+                    "character_sheet": character,
+                    "scenes": [valid_scene, filler_scene],
+                },
+            }
+        )
+
+        self.assertEqual(report.status, "failed")
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertIn("generic filler", joined)
+        self.assertIn("visual_brief.allowed_props", joined)
+
+    def test_campaign_profile_override_deep_merges_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profile.json"
+            path.write_text(
+                json.dumps({
+                    "name": "clinic_brand",
+                    "languages": {
+                        "korean": {
+                            "language_note": "Use clinic-approved Korean phrasing."
+                        }
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            profile = load_campaign_profile(path)
+
+        self.assertEqual(profile["name"], "clinic_brand")
+        self.assertEqual(profile["languages"]["korean"]["language_note"], "Use clinic-approved Korean phrasing.")
+        self.assertIn("platforms", profile["languages"]["korean"])
+        self.assertIn("english", profile["languages"])
 
 
     def test_dashboard_payload_reads_agent_trace(self):

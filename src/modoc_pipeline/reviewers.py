@@ -32,30 +32,14 @@ def deterministic_creative_report(
         if not _has_selected_safe_score(creative_scores, lang):
             issues.append(_issue(subject, "creative_scores must select one candidate with medical_safety >= 4."))
         bgm_prompt = str(lang_plan.get("bgm_prompt", "")).lower()
-        if serious_topic and _has_any(
-            bgm_prompt,
-            (
-                "party",
-                "festive",
-                "cute",
-                "comedy",
-                "hyperpop",
-                "reggaeton",
-                "dembow",
-                "dance",
-                "808",
-                "huge drop",
-                "club",
-                "k-pop synth-pop",
-            ),
-        ):
-            issues.append(_issue(subject, "BGM prompt is too playful or dance-focused for a serious medical topic. Use gentle, low-density, reassuring educational music."))
+        if not _has_any(bgm_prompt, ("instrumental", "no vocals", "no lyrics")):
+            issues.append(_issue(subject, "BGM prompt should explicitly keep the track instrumental and voiceover-safe."))
         bgm_config = lang_plan.get("bgm_config", {}) if isinstance(lang_plan.get("bgm_config"), dict) else {}
         if serious_topic:
-            if float(bgm_config.get("density", 0.0) or 0.0) > 0.68:
-                issues.append(_issue(subject, "BGM density is too high for a serious medical topic. Use density <= 0.68."))
-            if float(bgm_config.get("brightness", 0.0) or 0.0) > 0.76:
-                issues.append(_issue(subject, "BGM brightness is too high for a serious medical topic. Use brightness <= 0.76."))
+            if float(bgm_config.get("density", 0.0) or 0.0) > 0.86:
+                issues.append(_issue(subject, "BGM density is too high for voiceover clarity. Use density <= 0.86."))
+            if float(bgm_config.get("brightness", 0.0) or 0.0) > 0.92:
+                issues.append(_issue(subject, "BGM brightness is too high for voiceover clarity. Use brightness <= 0.92."))
 
     if issues:
         return ReviewReport(
@@ -123,6 +107,14 @@ def deterministic_meme_text_report(
 
 def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewReport:
     issues: list[dict[str, Any]] = []
+    visual_brief = meme_plan.get("visual_brief", {}) if isinstance(meme_plan, dict) else {}
+    allowed_props = [str(p).strip().lower() for p in visual_brief.get("allowed_props", []) or [] if str(p).strip()]
+    forbidden_visuals = [str(v).strip().lower() for v in visual_brief.get("forbidden_visuals", []) or [] if str(v).strip()]
+    content_type = str(visual_brief.get("content_type", "")).strip()
+    if not content_type:
+        issues.append(_issue("visual_brief", "content_type is required for row-specific visual planning."))
+    if content_type and not allowed_props:
+        issues.append(_issue("visual_brief", "allowed_props is required for content-specific visual grammar."))
     for lang in ("english", "korean", "spanish"):
         lang_plan = meme_plan.get(lang)
         if not isinstance(lang_plan, dict):
@@ -130,26 +122,87 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
         anchor = str(lang_plan.get("visual_style_anchor", "")).strip()
         character = str(lang_plan.get("character_sheet", "")).strip()
         character_probe = character[:30]
-        for scene in lang_plan.get("scenes", []) or []:
+        scenes = lang_plan.get("scenes", []) or []
+        shot_types: list[str] = []
+        primary_props: list[str] = []
+        backgrounds: list[str] = []
+        for scene in scenes:
             scene_id = str(scene.get("scene_id", ""))
             prompt = str(scene.get("image_prompt", ""))
             subject = f"{lang}/{scene_id}"
+            shot_type = str(scene.get("shot_type", "")).strip()
+            primary_prop = str(scene.get("primary_prop", "")).strip().lower()
+            background = str(scene.get("background", "")).strip().lower()
+            if shot_type:
+                shot_types.append(shot_type)
+            if primary_prop:
+                primary_props.append(primary_prop)
+                if allowed_props and not _prop_matches_allowed(primary_prop, allowed_props):
+                    issues.append(_issue(subject, f"primary_prop should come from visual_brief.allowed_props: {primary_prop}."))
+                if primary_prop in {"plant", "potted plant", "coffee mug", "mug", "tea cup"} and not _prop_matches_allowed(primary_prop, allowed_props):
+                    issues.append(_issue(subject, f"primary_prop looks like generic filler instead of a row-specific visual anchor: {primary_prop}."))
+            if background:
+                backgrounds.append(background)
+            for field in ("medical_message", "scene_visual_action", "shot_type"):
+                if not str(scene.get(field, "")).strip():
+                    issues.append(_issue(subject, f"{field} is required for visual scene planning."))
+            safe_props = [str(p).strip().lower() for p in scene.get("safe_props", []) or [] if str(p).strip()]
+            for prop in safe_props:
+                if allowed_props and not _prop_matches_allowed(prop, allowed_props):
+                    issues.append(_issue(subject, f"safe_props should come from visual_brief.allowed_props: {prop}."))
             if anchor and not prompt.startswith(anchor[:40]):
                 issues.append(_issue(subject, "image_prompt must start with the visual_style_anchor."))
             if character_probe and character_probe not in prompt:
-                issues.append(_issue(subject, "image_prompt must include the locked character_sheet."))
+                issues.append(_issue(subject, "image_prompt must include the stable character_sheet."))
             lowered = prompt.lower()
             forbidden_pairs = {
                 "text": "image_prompt requests or permits visible text.",
                 "letters": "image_prompt requests or permits visible letters.",
                 "sign": "image_prompt requests or permits visible signs.",
                 "logo": "image_prompt requests or permits visible logos.",
-                "medical device": "image_prompt includes medical devices.",
                 "realistic face": "image_prompt includes realistic faces.",
             }
             for token, message in forbidden_pairs.items():
                 if token in lowered and "no " + token not in lowered and "zero " + token not in lowered:
                     issues.append(_issue(subject, message))
+            repetitive_phrases = (
+                "always holding",
+                "holding the warm mug",
+                "holding a warm mug",
+                "same character as scene",
+            )
+            for phrase in repetitive_phrases:
+                if phrase in lowered:
+                    issues.append(_issue(subject, f"image_prompt over-preserves a repeated prop or prior scene: {phrase}."))
+            hallucination_prone = (
+                "balance scale",
+                "blood drop",
+                "traffic light",
+                "lab report",
+                "lab card",
+                "medical chart",
+                "calendar with",
+                "numbered calendar",
+                "visible numbers",
+                "leaf symbol",
+                "organs",
+                "pills",
+            )
+            for phrase in hallucination_prone:
+                if phrase in lowered:
+                    issues.append(_issue(subject, f"image_prompt uses hallucination-prone medical infographic imagery: {phrase}."))
+            for phrase in forbidden_visuals:
+                if phrase and phrase in lowered:
+                    issues.append(_issue(subject, f"image_prompt conflicts with visual_brief.forbidden_visuals: {phrase}."))
+
+        if len(scenes) >= 4:
+            subject = f"{lang}/visual_variety"
+            if len(set(shot_types)) < 3:
+                issues.append(_issue(subject, "Use at least 3 distinct shot_type values across the 4 scenes."))
+            if _has_repeated_nonempty(primary_props, max_allowed=2):
+                issues.append(_issue(subject, "Do not repeat the same primary_prop in more than 2 scenes."))
+            if _has_repeated_nonempty(backgrounds, max_allowed=2):
+                issues.append(_issue(subject, "Do not repeat the same background in more than 2 scenes."))
 
     if issues:
         return ReviewReport(
@@ -157,13 +210,27 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
             stage="visual_prompt_review",
             summary="Deterministic visual prompt validation failed.",
             issues=issues,
-            repair_instruction="Rewrite failed image_prompt fields to include the anchor and character sheet, and ban visible text, logos, realistic faces, children, and medical devices.",
+            repair_instruction="Rewrite failed visual fields so visual_brief has a content_type and allowed_props, each scene uses row-specific allowed props, has medical_message/scene_visual_action, varies shot_type/prop/background, includes anchor and character sheet, and avoids visible text, logos, realistic faces, generic filler props, forbidden visuals, and medical infographic symbols.",
         )
     return ReviewReport(
         status="passed",
         stage="visual_prompt_review",
         summary="Deterministic visual prompt validation passed.",
     )
+
+
+def _has_repeated_nonempty(values: list[str], *, max_allowed: int) -> bool:
+    for value in set(v for v in values if v):
+        if values.count(value) > max_allowed:
+            return True
+    return False
+
+
+def _prop_matches_allowed(prop: str, allowed_props: list[str]) -> bool:
+    prop = prop.strip().lower()
+    if not prop:
+        return True
+    return any(prop in allowed or allowed in prop for allowed in allowed_props)
 
 
 def _has_selected_safe_score(creative_scores: dict[str, Any], language: str) -> bool:

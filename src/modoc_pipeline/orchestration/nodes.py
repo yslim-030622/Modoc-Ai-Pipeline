@@ -143,9 +143,11 @@ def meme_planner_agent_node(state: PipelineState) -> PipelineState:
                 model=state["model"],
                 scripts=state.get("scripts", {}),
                 topic=topic,
+                campaign_profile_path=state.get("campaign_profile_path"),
             )
         write_json(Path(state["run_dir"]) / "meme_plan.json", result.parsed)
         write_json(Path(state["run_dir"]) / "trend_research.json", result.trend_research)
+        write_json(Path(state["run_dir"]) / "visual_brief.json", result.visual_brief)
         write_json(Path(state["run_dir"]) / "creative_candidates.json", result.creative_candidates)
         write_json(Path(state["run_dir"]) / "creative_scores.json", result.creative_scores)
         write_text(Path(state["run_dir"]) / "raw_meme_plan_response.txt", result.raw_text)
@@ -155,6 +157,7 @@ def meme_planner_agent_node(state: PipelineState) -> PipelineState:
                 "meme_plan": result.parsed,
                 "meme_plan_raw_text": result.raw_text,
                 "trend_research": result.trend_research,
+                "visual_brief": result.visual_brief,
                 "creative_candidates": result.creative_candidates,
                 "creative_scores": result.creative_scores,
                 "topic": topic,

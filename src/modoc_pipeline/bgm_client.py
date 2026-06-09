@@ -27,60 +27,53 @@ LYRIA_SAMPLE_WIDTH = 2
 DEFAULT_BGM_SECONDS = 30.0
 DEFAULT_STREAM_TIMEOUT_SECONDS = 45.0
 
-# Culturally-tuned BGM prompts engineered for viral short-form parenting content.
+# Culturally-tuned BGM prompts for bright short-form parenting content.
 #
-# These defaults are conservative fallbacks. Topic-specific MemePlan bgm_prompt
-# should normally override them. Keep defaults voiceover-safe and medically calm.
-#
-# Prompt rules for Lyria:
-#   - Lead with BPM + genre so the model locks tempo immediately
-#   - Say "punchy kick" / "hook from the first bar" — Lyria responds to these cues
-#   - End with explicit no-vocals guardrail
+# Keep these prompts short. Topic-specific MemePlan bgm_prompt usually
+# overrides them, and overly engineered negative prompts tend to make Lyria
+# produce dark, timid underscore.
 LANGUAGE_BGM_PROMPTS: dict[str, str] = {
     "korean": (
-        "Gentle Korean social-video educational underscore at 92 BPM. "
-        "Soft electric piano, light muted percussion, warm pad, subtle pluck accents. "
-        "Calm and reassuring, not cute, not comedic, leaving clear space for voiceover. "
-        "Instrumental only — absolutely no lyrics, no vocals, no humming, no voice whatsoever."
+        "Bright Korean short-form instrumental at 114 BPM. "
+        "Clean pop groove, light percussion, warm keys, catchy first bar, optimistic parent-friendly energy. "
+        "No vocals, no lyrics, leave room for voiceover."
     ),
     "english": (
-        "Gentle educational short-form underscore at 96 BPM. "
-        "Soft piano, muted marimba accents, light brushed percussion, warm low synth pad. "
-        "Reassuring, curious, parent-friendly, never festive or dramatic, leaving clear space for voiceover. "
-        "Instrumental only — absolutely no lyrics, no vocals, no humming, no voice whatsoever."
+        "Bright upbeat short-form instrumental at 116 BPM. "
+        "Light pop groove, clean percussion, warm keys, catchy first bar, optimistic parent-friendly energy. "
+        "No vocals, no lyrics, leave room for voiceover."
     ),
     "spanish": (
-        "Warm Spanish-language social-video educational underscore at 94 BPM. "
-        "Soft nylon guitar, gentle marimba accents, light shaker, warm pad, no dembow rhythm. "
-        "Human, calm, reassuring, not festive, not party-like, leaving clear space for voiceover. "
-        "Instrumental only — absolutely no lyrics, no vocals, no humming, no voice whatsoever."
+        "Bright Spanish-language short-form instrumental at 112 BPM. "
+        "Clean Latin-pop pulse, soft guitar, light percussion, warm keys, optimistic parent-friendly energy. "
+        "No vocals, no lyrics, leave room for voiceover."
     ),
 }
 
 
 LANGUAGE_BGM_CONFIG: dict[str, types.LiveMusicGenerationConfig] = {
     "korean": types.LiveMusicGenerationConfig(
-        bpm=92,
+        bpm=114,
         temperature=1.0,
-        guidance=4.0,
-        density=0.56,
-        brightness=0.62,
+        guidance=3.2,
+        density=0.70,
+        brightness=0.80,
         music_generation_mode=types.MusicGenerationMode.QUALITY,
     ),
     "english": types.LiveMusicGenerationConfig(
-        bpm=96,
+        bpm=116,
         temperature=1.0,
-        guidance=4.0,
-        density=0.58,
-        brightness=0.65,
+        guidance=3.2,
+        density=0.72,
+        brightness=0.82,
         music_generation_mode=types.MusicGenerationMode.QUALITY,
     ),
     "spanish": types.LiveMusicGenerationConfig(
-        bpm=94,
+        bpm=112,
         temperature=1.0,
-        guidance=4.0,
-        density=0.58,
-        brightness=0.66,
+        guidance=3.2,
+        density=0.70,
+        brightness=0.82,
         music_generation_mode=types.MusicGenerationMode.QUALITY,
     ),
 }
@@ -282,7 +275,7 @@ def _ensure_ssl_cert_file() -> None:
 
 def _with_instrumental_guardrail(prompt: str | None) -> str:
     text = (prompt or "").strip()
-    guardrail = "Instrumental only — absolutely no lyrics, no vocals, no humming, no voice whatsoever."
+    guardrail = "No vocals, no lyrics, no humming, leave room for voiceover."
     if not text:
         return guardrail
     lowered = text.lower()

@@ -78,9 +78,9 @@ def _synthesize(
     style_instruction: str = "",
 ) -> bytes:
     """Call Gemini TTS and return raw PCM bytes."""
-    style_prefix = style_instruction.strip() or LANGUAGE_NARRATION_STYLE.get(language, LANGUAGE_NARRATION_STYLE["english"])
-    if "내용:" not in style_prefix and "Content:" not in style_prefix and "Contenido:" not in style_prefix:
-        style_prefix = f"{style_prefix.strip()} Content: "
+    # Model-generated style strings are unsafe here: Gemini TTS may read them
+    # aloud as content. Use fixed language instructions and append only the text.
+    style_prefix = LANGUAGE_NARRATION_STYLE.get(language, LANGUAGE_NARRATION_STYLE["english"])
     prompt = f"{style_prefix}{text}"
     response = client.models.generate_content(
         model=model,

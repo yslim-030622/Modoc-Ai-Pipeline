@@ -13,6 +13,20 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 LanguageKey = Literal["english", "korean", "spanish"]
 CaptionRole = Literal["hook", "tension", "insight", "relief"]
 CaptionStyle = Literal["impact", "clean_reels", "korean_jjal", "spanish_social"]
+ShotType = Literal["close_up", "medium_action", "wide_scene", "over_the_shoulder", "tabletop_action", "conversation"]
+ContentType = Literal[
+    "fever_triage",
+    "medication_dosing",
+    "vaccine_reaction",
+    "gi_hydration",
+    "puberty_period",
+    "rash_skin",
+    "lab_result",
+    "development_behavior",
+    "injury_urgent",
+    "newborn_feeding_sleep",
+    "general",
+]
 
 
 class GroundingCitation(BaseModel):
@@ -115,6 +129,12 @@ class MemeScene(BaseModel):
     scene_id: str
     meme_format: MemeFormat
     caption_role: CaptionRole = "hook"
+    medical_message: str = ""
+    scene_visual_action: str = ""
+    safe_props: list[str] = Field(default_factory=list)
+    shot_type: ShotType = "medium_action"
+    primary_prop: str = ""
+    background: str = ""
     top_text: str = ""
     bottom_text: str
     image_prompt: str
@@ -132,6 +152,18 @@ class MemeScene(BaseModel):
         if not value.strip():
             raise ValueError("scene_id is required")
         return value
+
+
+class ContentVisualBrief(BaseModel):
+    content_type: ContentType = "general"
+    care_context: str = ""
+    target_subject: str = ""
+    risk_level: Literal["low", "medium", "high"] = "low"
+    allowed_props: list[str] = Field(default_factory=list, max_length=8)
+    forbidden_visuals: list[str] = Field(default_factory=list, max_length=12)
+    must_show: list[str] = Field(default_factory=list, max_length=6)
+    must_not_show: list[str] = Field(default_factory=list, max_length=8)
+    visual_tone: str = ""
 
 
 class MemeLangPlan(BaseModel):
@@ -155,6 +187,7 @@ class MemePlan(BaseModel):
     korean: MemeLangPlan
     spanish: MemeLangPlan
     source_topic: str
+    visual_brief: ContentVisualBrief = Field(default_factory=ContentVisualBrief)
 
     @model_validator(mode="before")
     @classmethod

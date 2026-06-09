@@ -35,6 +35,7 @@ class PipelineState(TypedDict, total=False):
     enable_search: bool
     skip_tts: bool
     no_zoom: bool
+    campaign_profile_path: str | None
     total_started: float
 
     source: dict[str, Any]
@@ -48,6 +49,7 @@ class PipelineState(TypedDict, total=False):
     claims: list[dict[str, Any]]
     script_raw_text: str
     trend_research: dict[str, Any]
+    visual_brief: dict[str, Any]
     creative_candidates: dict[str, Any]
     creative_scores: dict[str, Any]
     meme_plan: dict[str, Any]

@@ -73,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--no-zoom", action="store_true", help="Disable Ken Burns zoom effect.")
     generate.add_argument("--model", default=None, help="Gemini model. Defaults to GEMINI_MODEL env var.")
     generate.add_argument("--skip-search", action="store_true", help="Skip Gemini Google Search grounding.")
+    generate.add_argument(
+        "--campaign-profile",
+        default=None,
+        help="Path to a campaign profile JSON for meme planning. Defaults to MODOC_CAMPAIGN_PROFILE.",
+    )
 
     # ── Meme slideshow pipeline (individual stages for power users) ──────────
 
@@ -85,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=None,
         help="Gemini model for meme planning. Defaults to GEMINI_MEME_MODEL or gemini-2.0-flash.",
+    )
+    meme_plan_parser.add_argument(
+        "--campaign-profile",
+        default=None,
+        help="Path to a campaign profile JSON. Defaults to MODOC_CAMPAIGN_PROFILE.",
     )
     meme_plan_parser.add_argument("--scenes", type=int, default=4, help="Number of scenes per language (3-5).")
 
@@ -126,6 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
     meme_all_parser.add_argument("--video-dir", default=DEFAULT_VIDEO_DIR, help="Directory for final videos.")
     meme_all_parser.add_argument("--skip-tts", action="store_true", help="Skip edge-tts (produce silent videos).")
     meme_all_parser.add_argument("--no-zoom", action="store_true", help="Disable Ken Burns zoom effect.")
+    meme_all_parser.add_argument(
+        "--campaign-profile",
+        default=None,
+        help="Path to a campaign profile JSON. Defaults to MODOC_CAMPAIGN_PROFILE.",
+    )
 
     dashboard_parser = subparsers.add_parser(
         "dashboard",
@@ -179,6 +194,7 @@ def run_generate(args: argparse.Namespace) -> int:
             "enable_search": not args.skip_search and _env_bool("GEMINI_ENABLE_SEARCH", default=True),
             "skip_tts": args.skip_tts,
             "no_zoom": args.no_zoom,
+            "campaign_profile_path": args.campaign_profile or os.getenv("MODOC_CAMPAIGN_PROFILE", "").strip() or None,
             "total_started": total_started,
             "agent_trace": [],
         }
@@ -214,6 +230,7 @@ def _run_meme_for_run_dir(
     skip_tts: bool,
     no_zoom: bool,
     video_dir: Path,
+    campaign_profile_path: str | None = None,
 ) -> bool:
     """Run meme-plan → imagen → tts → bgm → render for an existing run_dir.
 
@@ -232,9 +249,16 @@ def _run_meme_for_run_dir(
     print(f"\n[2/5] meme-plan — researching trends and generating plan...")
     try:
         with timed_stage(run_dir, "meme_plan"):
-            result = generate_meme_plan(api_key=api_key, model=meme_model, scripts=scripts, topic=topic)
+            result = generate_meme_plan(
+                api_key=api_key,
+                model=meme_model,
+                scripts=scripts,
+                topic=topic,
+                campaign_profile_path=campaign_profile_path or os.getenv("MODOC_CAMPAIGN_PROFILE", "").strip() or None,
+            )
             write_json(run_dir / "meme_plan.json", result.parsed)
             write_json(run_dir / "trend_research.json", result.trend_research)
+            write_json(run_dir / "visual_brief.json", result.visual_brief)
             write_json(run_dir / "creative_candidates.json", result.creative_candidates)
             write_json(run_dir / "creative_scores.json", result.creative_scores)
             write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
@@ -360,9 +384,16 @@ def run_meme_plan(args: argparse.Namespace) -> int:
         scripts = read_json(scripts_path)
         topic = _derive_topic(scripts)
         print(f"Researching meme trends and generating plan for: {topic}")
-        result = generate_meme_plan(api_key=api_key, model=model, scripts=scripts, topic=topic)
+        result = generate_meme_plan(
+            api_key=api_key,
+            model=model,
+            scripts=scripts,
+            topic=topic,
+            campaign_profile_path=args.campaign_profile or os.getenv("MODOC_CAMPAIGN_PROFILE", "").strip() or None,
+        )
         write_json(run_dir / "meme_plan.json", result.parsed)
         write_json(run_dir / "trend_research.json", result.trend_research)
+        write_json(run_dir / "visual_brief.json", result.visual_brief)
         write_json(run_dir / "creative_candidates.json", result.creative_candidates)
         write_json(run_dir / "creative_scores.json", result.creative_scores)
         write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
@@ -579,9 +610,16 @@ def run_meme_all(args: argparse.Namespace) -> int:
     topic = _derive_topic(scripts)
     try:
         print(f"\n[1/4] meme-plan — researching trends and generating plan...")
-        result = generate_meme_plan(api_key=api_key, model=model, scripts=scripts, topic=topic)
+        result = generate_meme_plan(
+            api_key=api_key,
+            model=model,
+            scripts=scripts,
+            topic=topic,
+            campaign_profile_path=args.campaign_profile or os.getenv("MODOC_CAMPAIGN_PROFILE", "").strip() or None,
+        )
         write_json(run_dir / "meme_plan.json", result.parsed)
         write_json(run_dir / "trend_research.json", result.trend_research)
+        write_json(run_dir / "visual_brief.json", result.visual_brief)
         write_json(run_dir / "creative_candidates.json", result.creative_candidates)
         write_json(run_dir / "creative_scores.json", result.creative_scores)
         write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)

@@ -1,0 +1,31 @@
+{
+  "name": "modoc_trend_first_default_override",
+  "trend_window": "last 30 days when current search results are available",
+  "languages": {
+    "korean": {
+      "language_note": "Use native Korean parent education phrasing from current search results. Keep the caregiver calm and well-rested unless the source script explicitly requires fatigue."
+    },
+    "spanish": {
+      "language_note": "Use warm native Spanish phrasing from current search results. Avoid stereotype-led labels."
+    }
+  },
+  "visual_policy": [
+    "Use one video-level caregiver identity across all languages in the same run, but do not reuse the same pose, prop, room, or composition in every scene.",
+    "Use a clean, brand-safe caregiver design with bright eyes. Do not include an always-present prop in the character identity.",
+    "Each scene should use a distinct concrete action, ordinary prop, shot type, and background. Do not turn medical concepts into infographics or symbols.",
+    "Do not add dark circles, exhausted facial features, messy-night imagery, or 3am bedroom scenes unless the source script specifically requires a night scenario."
+  ],
+  "banned_templates": [
+    "Mamá latina",
+    "default exhausted mom",
+    "dark circles as a character trait",
+    "every Korean hook as 새벽 육아 or search anxiety",
+    "fear bait",
+    "diagnosis bait"
+  ],
+  "bgm_policy": [
+    "BGM must be instrumental only, with no vocals, humming, lyrics, or artist names.",
+    "Use bright, clean, short-form instrumental music with a catchy first bar and room for voiceover.",
+    "For serious medical topics, stay parent-friendly and voiceover-safe without making the music somber or low-energy."
+  ]
+}
