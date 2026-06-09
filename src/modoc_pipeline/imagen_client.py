@@ -21,7 +21,7 @@ from .gemini_client import parse_json_response
 log = logging.getLogger(__name__)
 
 DEFAULT_IMAGE_MODEL = "gemini-3.1-flash-image"
-DEFAULT_IMAGE_REVIEW_MODEL = "gemini-3.1-flash"
+DEFAULT_IMAGE_REVIEW_MODEL = "gemini-3.5-flash"
 _FREE_TIER_SLEEP_SECONDS = 6
 
 
