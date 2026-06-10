@@ -155,6 +155,11 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
             if character_probe and character_probe not in prompt:
                 issues.append(_issue(subject, "image_prompt must include the stable character_sheet."))
             lowered = prompt.lower()
+            if primary_prop and primary_prop not in lowered:
+                issues.append(_issue(subject, f"image_prompt must visibly include primary_prop: {primary_prop}."))
+            semantic_issue = _semantic_visual_mismatch(scene, lowered)
+            if semantic_issue:
+                issues.append(_issue(subject, semantic_issue))
             forbidden_pairs = {
                 "text": "image_prompt requests or permits visible text.",
                 "letters": "image_prompt requests or permits visible letters.",
@@ -217,6 +222,35 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
         stage="visual_prompt_review",
         summary="Deterministic visual prompt validation passed.",
     )
+
+
+def _semantic_visual_mismatch(scene: dict[str, Any], lowered_prompt: str) -> str:
+    tts = str(scene.get("tts_text", "")).strip().lower()
+    if not tts:
+        return ""
+
+    checks = (
+        (
+            ("fever", "열", "fiebre", "temperature", "40 degrees", "40도"),
+            ("thermometer", "water", "medicine", "medication", "light clothing", "blanket", "monitoring", "해열", "체온", "물", "termómetro", "agua"),
+            "fever-related tts_text needs a visible fever-care anchor in image_prompt.",
+        ),
+        (
+            ("x-ray", "xray", "stethoscope", "청진", "폐사진", "radiografía", "estetoscopio"),
+            ("x-ray", "xray", "stethoscope", "folder", "doctor desk", "comparison", "청진", "폐사진", "radiografía", "estetoscopio"),
+            "x-ray/stethoscope tts_text needs a visible diagnostic comparison anchor in image_prompt.",
+        ),
+        (
+            ("er", "emergency", "urgent", "응급", "urgencias", "unresponsive", "trouble breathing", "breathing", "경련", "호흡"),
+            ("phone", "pediatric", "doctor", "clinic", "warning", "monitoring", "caregiver watching", "breathing", "응급", "소아과", "urgencias", "médico"),
+            "emergency-warning tts_text needs a visible triage or warning-sign anchor, not only routine care.",
+        ),
+    )
+
+    for triggers, anchors, message in checks:
+        if _has_any(tts, triggers) and not _has_any(lowered_prompt, anchors):
+            return message
+    return ""
 
 
 def _has_repeated_nonempty(values: list[str], *, max_allowed: int) -> bool:

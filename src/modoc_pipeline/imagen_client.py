@@ -248,8 +248,11 @@ Return JSON only:
 Fail if:
 - the image contains readable text, letters, numbers, labels, logos, charts, or UI;
 - it uses forbidden visuals from the visual brief;
+- it does not clearly match the spoken tts_text;
 - it does not show the scene_visual_action or primary_prop;
+- primary_prop is provided but not visibly present;
 - it adds irrelevant generic filler instead of row-specific visual anchors;
+- it could fit an unrelated pediatric topic with no changes;
 - it is nearly the same static pose/prop/background as a generic caregiver scene;
 - a child appears but their gender differs from the character_sheet (e.g. girl described but boy shown, or vice versa);
 - a child's hair color, hair style, or clothing color visibly differs from the character_sheet;
@@ -292,6 +295,7 @@ def _image_repair_instruction(review: dict[str, Any]) -> str:
 
 def _build_image_prompt(scene: dict[str, Any], *, visual_style_anchor: str = "", character_sheet: str = "") -> str:
     base_prompt = scene.get("image_prompt", "").strip()
+    tts_text = str(scene.get("tts_text", "")).strip()
 
     # Inject anchor + character_sheet if the planner omitted them
     anchor_prefix = ""
@@ -307,5 +311,6 @@ def _build_image_prompt(scene: dict[str, Any], *, visual_style_anchor: str = "",
         "9:16 vertical. Flat 2D illustration style. "
         "You may add a few safe setting details that support the scene, but no readable text, labels, logos, dosage numbers, graphic symptoms, or alarming medical props."
     )
+    spoken_line_prefix = f'This image must visually match the spoken line: "{tts_text}".' if tts_text else ""
 
-    return " ".join(p for p in [no_text_prefix, base_prompt, style_suffix] if p)
+    return " ".join(p for p in [no_text_prefix, spoken_line_prefix, base_prompt, style_suffix] if p)

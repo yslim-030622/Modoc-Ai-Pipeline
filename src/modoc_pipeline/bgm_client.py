@@ -10,6 +10,8 @@ import asyncio
 import base64
 import logging
 import os
+import random
+import shutil
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,7 @@ LYRIA_CHANNELS = 2
 LYRIA_SAMPLE_WIDTH = 2
 DEFAULT_BGM_SECONDS = 30.0
 DEFAULT_STREAM_TIMEOUT_SECONDS = 45.0
+DEFAULT_STOCK_BGM_DIR = Path(__file__).resolve().parents[2] / "assets" / "bgm_pool"
 
 # Culturally-tuned BGM prompts for bright short-form parenting content.
 #
@@ -229,25 +232,78 @@ def generate_all_bgm(
     """Generate one BGM file per language. Returns {language: wav_path}."""
     output_dir.mkdir(parents=True, exist_ok=True)
     result: dict[str, Path] = {}
+    use_stock = _should_use_stock_bgm()
 
     for lang in ("english", "korean", "spanish"):
         if languages is not None and lang not in languages:
             continue
-        output_path = output_dir / f"{lang}_bgm.wav"
         lang_plan = (meme_plan or {}).get(lang, {}) if isinstance(meme_plan, dict) else {}
         try:
-            generate_meme_bgm(
-                language=lang,
-                output_path=output_path,
-                api_key=api_key,
-                prompt_override=str(lang_plan.get("bgm_prompt", "")).strip() or None,
-                music_config_override=lang_plan.get("bgm_config") if isinstance(lang_plan.get("bgm_config"), dict) else None,
-            )
+            if use_stock:
+                output_path = output_dir / f"{lang}_bgm.mp3"
+                _copy_random_stock_bgm(output_path)
+            else:
+                output_path = output_dir / f"{lang}_bgm.wav"
+                generate_meme_bgm(
+                    language=lang,
+                    output_path=output_path,
+                    api_key=api_key,
+                    prompt_override=str(lang_plan.get("bgm_prompt", "")).strip() or None,
+                    music_config_override=lang_plan.get("bgm_config") if isinstance(lang_plan.get("bgm_config"), dict) else None,
+                )
             result[lang] = output_path
         except Exception as exc:
-            log.warning("BGM generation failed for %s: %s", lang, exc)
+            if use_stock and _bgm_source_mode() != "stock":
+                log.warning("Stock BGM failed for %s, falling back to Lyria: %s", lang, exc)
+                output_path = output_dir / f"{lang}_bgm.wav"
+                try:
+                    generate_meme_bgm(
+                        language=lang,
+                        output_path=output_path,
+                        api_key=api_key,
+                        prompt_override=str(lang_plan.get("bgm_prompt", "")).strip() or None,
+                        music_config_override=lang_plan.get("bgm_config") if isinstance(lang_plan.get("bgm_config"), dict) else None,
+                    )
+                    result[lang] = output_path
+                    continue
+                except Exception as fallback_exc:
+                    log.warning("BGM generation failed for %s: %s", lang, fallback_exc)
+            else:
+                log.warning("BGM generation failed for %s: %s", lang, exc)
 
     return result
+
+
+def _bgm_source_mode() -> str:
+    return os.getenv("MODOC_BGM_SOURCE", "stock").strip().lower()
+
+
+def _should_use_stock_bgm() -> bool:
+    mode = _bgm_source_mode()
+    if mode in {"lyria", "generated"}:
+        return False
+    if mode in {"stock", "local"}:
+        return True
+    return bool(_stock_bgm_tracks())
+
+
+def _stock_bgm_tracks(stock_dir: Path | None = None) -> list[Path]:
+    stock_dir = stock_dir or DEFAULT_STOCK_BGM_DIR
+    if not stock_dir.exists():
+        return []
+    return sorted(path for path in stock_dir.iterdir() if path.suffix.lower() in {".mp3", ".m4a", ".wav"})
+
+
+def _copy_random_stock_bgm(output_path: Path, *, stock_dir: Path | None = None) -> Path:
+    stock_dir = stock_dir or DEFAULT_STOCK_BGM_DIR
+    tracks = _stock_bgm_tracks(stock_dir)
+    if not tracks:
+        raise BgmError(f"No stock BGM tracks found in {stock_dir}")
+    selected = random.choice(tracks)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(selected, output_path)
+    print(f"  BGM stock: {selected.name} → {output_path.name}")
+    return output_path
 
 
 def write_wave(
