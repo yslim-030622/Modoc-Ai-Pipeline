@@ -714,23 +714,25 @@ the precise medical explanation.
 
 CONTENT-SPECIFIC VISUAL ANCHORS:
 - Fever rows may use a blank digital thermometer, water cup, blanket, phone, or
-  caregiver checking temperature. Do not show readable temperature numbers.
+  caregiver checking temperature. A simple pediatric exam room or home-care
+  setup is allowed. Do not show readable temperature numbers.
 - Medication rows may use an unlabeled medicine bottle, measuring spoon, oral
-  syringe without numbers, phone timer, or blank dosing note. Do not show labels,
-  pills, dosage numbers, brands, or needles.
+  syringe without numbers, phone timer, pharmacy bag, or blank dosing note. Do
+  not show readable labels, loose pills, dosage numbers, brands, or needles.
 - Vaccine reaction rows may use a baby blanket, tiny bandage sticker, blank
-  thermometer, water cup, phone, or caregiver lap. Do not show injection needles
-  or vaccine vial text.
+  thermometer, water cup, phone, caregiver lap, waiting-room chair, or clinic
+  folder. Do not show needles entering skin or vaccine vial text.
 - GI hydration rows may use water cup, small bowl, towel, sofa, or caregiver
   offering fluids. Do not show vomit, toilet scenes, or graphic fluids.
 - Puberty/period rows may use a closed planner, plain pouch, folded towel, phone,
   private desk, or clinic folder. Do not show blood drops, uterus graphics, or
   visible calendar numbers.
 - Rash rows may use a phone photo posture without detailed rash, towel, clinic
-  folder, or lamp. Do not show graphic lesions or diagnosis labels.
+  folder, lamp, or pediatric office background. Do not show graphic lesions or
+  diagnosis labels.
 - Lab/result rows may use blank paper, folder, phone call, doctor desk, pen, or
-  two blank cards. Do not show readable lab reports, charts, numbers, balance
-  scales, or blood drop icons.
+  two blank cards. A calm consultation desk is allowed. Do not show readable lab
+  reports, charts, numbers, balance scales, or blood drop icons.
 - Development/behavior rows may use blocks, picture books, play mat, notebook,
   or caregiver observing. Do not show diagnosis stamps, brain icons, or scores.
 - Injury/urgent rows may use an ice pack wrapped in towel, phone, sofa, clinic
@@ -739,10 +741,14 @@ CONTENT-SPECIFIC VISUAL ANCHORS:
 - Newborn feeding/sleep rows may use baby blanket, feeding bottle without labels,
   burp cloth, dim lamp, crib silhouette, or phone. Do not show unsafe sleep.
 
-IMAGE SIMPLICITY:
+IMAGE DETAIL:
 - Do not make medical infographics, charts, scales, traffic lights, lab cards,
   diagnosis symbols, or symbolic medical metaphors unless the visual brief
   explicitly allows a concrete non-text prop.
+- You may add 2-4 safe environmental details that support the setting, such as
+  toys, blankets, books, water cups, soft lamps, clinic chairs, wall art, or
+  caregiver bags. Do not add text, logos, labels, diagnosis charts, or alarming
+  medical props.
 - If you need to show time passing, use blank reminder cards, a closed planner,
   or a phone timer with no visible numbers.
 - If you need to show concern or comparison, use caregiver body language, two
@@ -767,7 +773,7 @@ IMAGE PROMPT RULES:
 - Bad: four scenes of the caregiver standing still with the same mug or phone.
 - Bad: balance scale, blood drop, plant/leaf symbol, traffic light, numbered calendar,
   lab report, medical chart, icon labels, or any text inside the image.
-- Max 90 words. 9:16 vertical.
+- Max 120 words. 9:16 vertical.
 - Do not add dark circles, exhausted features, messy-night imagery, or 3am bedroom
   scenes unless the source script specifically needs a night scenario.
 

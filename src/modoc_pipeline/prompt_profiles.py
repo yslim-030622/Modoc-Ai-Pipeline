@@ -60,7 +60,7 @@ DEFAULT_CAMPAIGN_PROFILE: dict[str, Any] = {
     ],
     "image_guardrails": [
         "No visible text, letters, logos, or signs in generated images.",
-        "No visible medical devices or clinical equipment.",
+        "Allow common home-care and pediatric-office props when relevant, such as blank thermometers, plain medicine bottles, bandages, masks, waiting-room chairs, clinic folders, and stethoscopes in the background. Do not show readable labels, dosage numbers, blood, needles entering skin, graphic symptoms, or active procedures.",
         "9:16 vertical illustration suitable for short-form video.",
     ],
     "banned_templates": [

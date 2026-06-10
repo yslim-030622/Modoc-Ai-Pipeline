@@ -1,6 +1,6 @@
 """Gemini image generation client for the meme slideshow pipeline.
 
-Uses gemini-3-pro-image (Nano Banana Pro) for image generation.
+Uses Gemini image generation for meme scene images.
 Generates one PNG per MemeScene per language.
 """
 
@@ -20,7 +20,7 @@ from .gemini_client import parse_json_response
 
 log = logging.getLogger(__name__)
 
-DEFAULT_IMAGE_MODEL = "gemini-3-pro-image"
+DEFAULT_IMAGE_MODEL = "gemini-3.1-flash-image"
 DEFAULT_IMAGE_REVIEW_MODEL = "gemini-3.5-flash"
 _FREE_TIER_SLEEP_SECONDS = 6
 
@@ -305,7 +305,7 @@ def _build_image_prompt(scene: dict[str, Any], *, visual_style_anchor: str = "",
     no_text_prefix = "ABSOLUTELY NO text, words, letters, or signs in the image. "
     style_suffix = (
         "9:16 vertical. Flat 2D illustration style. "
-        "Do not add props beyond the scene prompt."
+        "You may add a few safe setting details that support the scene, but no readable text, labels, logos, dosage numbers, graphic symptoms, or alarming medical props."
     )
 
     return " ".join(p for p in [no_text_prefix, base_prompt, style_suffix] if p)
