@@ -16,7 +16,7 @@ class BgmClientTests(unittest.TestCase):
                 bgm_client.write_wave(output_path, b"\x00\x00" * 16)
                 return output_path
 
-            with patch.object(bgm_client, "generate_meme_bgm", side_effect=fake_generate):
+            with patch.dict("os.environ", {"MODOC_BGM_SOURCE": "lyria"}), patch.object(bgm_client, "generate_meme_bgm", side_effect=fake_generate):
                 result = bgm_client.generate_all_bgm(
                     output_dir=output_dir,
                     api_key="unused",
@@ -56,7 +56,7 @@ class BgmClientTests(unittest.TestCase):
                     "bgm_config": {"bpm": 118, "density": 0.5, "brightness": 0.8},
                 }
             }
-            with patch.object(bgm_client, "generate_meme_bgm", side_effect=fake_generate):
+            with patch.dict("os.environ", {"MODOC_BGM_SOURCE": "lyria"}), patch.object(bgm_client, "generate_meme_bgm", side_effect=fake_generate):
                 result = bgm_client.generate_all_bgm(
                     output_dir=output_dir,
                     api_key="unused",
@@ -71,6 +71,20 @@ class BgmClientTests(unittest.TestCase):
     def test_bgm_prompt_guardrail_adds_no_vocals(self):
         prompt = bgm_client._with_instrumental_guardrail("Soft upbeat piano")
         self.assertIn("no vocals", prompt.lower())
+
+    def test_copy_random_stock_bgm_writes_mp3(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            stock_dir = base / "stock"
+            stock_dir.mkdir()
+            source = stock_dir / "track.mp3"
+            source.write_bytes(b"fake mp3 bytes")
+            output = base / "english_bgm.mp3"
+
+            result = bgm_client._copy_random_stock_bgm(output, stock_dir=stock_dir)
+
+            self.assertEqual(result, output)
+            self.assertEqual(output.read_bytes(), b"fake mp3 bytes")
 
 
 if __name__ == "__main__":

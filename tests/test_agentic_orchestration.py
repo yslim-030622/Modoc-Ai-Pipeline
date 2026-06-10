@@ -293,6 +293,7 @@ class AgenticOrchestrationTests(unittest.TestCase):
             "shot_type": "close_up",
             "primary_prop": "blank digital thermometer",
             "background": "kitchen table",
+            "tts_text": "Check fever calmly.",
             "image_prompt": (
                 f"{anchor}. {character}. Close-up at a kitchen table, caregiver holding "
                 "a blank digital thermometer beside a water cup, calm posture, blank display."
@@ -326,6 +327,77 @@ class AgenticOrchestrationTests(unittest.TestCase):
         joined = " ".join(issue.issue for issue in report.issues)
         self.assertIn("generic filler", joined)
         self.assertIn("visual_brief.allowed_props", joined)
+
+    def test_visual_prompt_validation_requires_primary_prop_in_prompt(self):
+        anchor = "modern flat illustration"
+        character = "stable caregiver character"
+        report = deterministic_visual_prompt_report(
+            {
+                "visual_brief": {
+                    "content_type": "lab_result",
+                    "allowed_props": ["stethoscope", "blank folder", "doctor desk"],
+                    "forbidden_visuals": [],
+                },
+                "english": {
+                    "visual_style_anchor": anchor,
+                    "character_sheet": character,
+                    "scenes": [
+                        {
+                            "scene_id": "scene_01",
+                            "caption_role": "hook",
+                            "medical_message": "X-ray and stethoscope can differ.",
+                            "scene_visual_action": "Caregiver compares test feedback at a doctor desk.",
+                            "safe_props": ["stethoscope"],
+                            "shot_type": "over_the_shoulder",
+                            "primary_prop": "stethoscope",
+                            "background": "doctor desk",
+                            "tts_text": "The stethoscope can sound different from the X-ray.",
+                            "image_prompt": f"{anchor}. {character}. Caregiver reviews a blank folder at a doctor desk.",
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(report.status, "failed")
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertIn("primary_prop", joined)
+        self.assertIn("stethoscope", joined)
+
+    def test_visual_prompt_validation_rejects_generic_emergency_warning_scene(self):
+        anchor = "modern flat illustration"
+        character = "stable caregiver character"
+        report = deterministic_visual_prompt_report(
+            {
+                "visual_brief": {
+                    "content_type": "fever_triage",
+                    "allowed_props": ["water cup", "phone", "blank digital thermometer"],
+                    "forbidden_visuals": [],
+                },
+                "english": {
+                    "visual_style_anchor": anchor,
+                    "character_sheet": character,
+                    "scenes": [
+                        {
+                            "scene_id": "scene_04",
+                            "caption_role": "relief",
+                            "medical_message": "Know when emergency care is needed.",
+                            "scene_visual_action": "Caregiver offers water in a calm room.",
+                            "safe_props": ["water cup"],
+                            "shot_type": "medium_action",
+                            "primary_prop": "water cup",
+                            "background": "living room",
+                            "tts_text": "Go to the ER immediately if unresponsive or breathing is hard.",
+                            "image_prompt": f"{anchor}. {character}. Caregiver offers a water cup in a calm living room.",
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(report.status, "failed")
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertIn("emergency-warning", joined)
 
     def test_campaign_profile_override_deep_merges_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:

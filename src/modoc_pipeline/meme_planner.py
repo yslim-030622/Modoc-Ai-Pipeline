@@ -699,18 +699,21 @@ source of truth for visual decisions:
 
 For every scene, fill these fields before writing image_prompt:
 - medical_message: the single medically supported idea this scene communicates.
-- scene_visual_action: a concrete, safe action or situation that supports the
-  message without trying to explain the medicine inside the picture.
+- scene_visual_action: a concrete, safe action or situation that makes the
+  spoken tts_text visible.
 - safe_props: 0-3 props chosen from the visual brief's allowed_props unless the
   source script requires another safe prop.
 - shot_type: one of close_up, medium_action, wide_scene, over_the_shoulder,
   tabletop_action, conversation.
-- primary_prop: the main row-relevant prop, or "" if none.
+- primary_prop: the most important visible anchor for tts_text, or "" only if
+  the spoken line truly has no concrete visual anchor.
 - background: the scene-specific setting.
 
-The image_prompt must be derived from scene_visual_action + safe_props + shot_type.
-Images should support mood, pacing, and scene variety. Captions and TTS carry
-the precise medical explanation.
+The image_prompt must visually represent tts_text first, using
+scene_visual_action + safe_props + shot_type + primary_prop as support. If the
+scene is about warning signs, mismatch, comparison, medication, hydration, or
+test results, the image must show a concrete visual anchor for that idea. Do
+not use a generic caregiver-child scene unless it directly matches tts_text.
 
 CONTENT-SPECIFIC VISUAL ANCHORS:
 - Fever rows may use a blank digital thermometer, water cup, blanket, phone, or
