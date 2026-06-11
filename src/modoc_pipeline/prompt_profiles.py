@@ -74,8 +74,8 @@ DEFAULT_CAMPAIGN_PROFILE: dict[str, Any] = {
     "bgm_policy": [
         "BGM must be instrumental only, with no vocals, humming, lyrics, or artist names.",
         "Sound like a trending TikTok/Reels track: ukulele, claps, bouncy indie-pop or Latin-pop groove, immediate catchy hook in the first 2 seconds.",
-        "BGM must always be bright, cheerful, and high-energy — never somber, dark, or low-energy regardless of topic.",
-        "Target bpm 116-122, brightness 0.90-0.96, density 0.62-0.68 for maximum viral energy.",
+        "Default to bright short-form energy, but keep serious medical topics calm-bright and voiceover-safe instead of high intensity.",
+        "Target bpm 116-122, brightness 0.88-0.92, density 0.62-0.68; for serious medical topics keep brightness <= 0.92 and density <= 0.86.",
     ],
 }
 

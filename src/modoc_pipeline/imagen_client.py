@@ -141,6 +141,11 @@ def generate_meme_images(
                                 scene_id,
                                 "; ".join(review.get("issues", [])),
                             )
+                        if review.get("status") == "failed":
+                            raise ImagenError(
+                                f"Image QA failed for {lang_key}/{scene_id}: "
+                                f"{'; '.join(review.get('issues', []))}"
+                            )
                 scene_paths[scene_id] = output_path
                 # Lock the first successfully generated scene as the visual reference.
                 # All subsequent scenes receive this image to anchor character consistency.
@@ -149,6 +154,7 @@ def generate_meme_images(
                     log.debug("Locked reference image from %s/%s", lang_key, scene_id)
             except Exception as exc:
                 log.warning("Image generation failed for %s/%s: %s", lang_key, scene_id, exc)
+                raise
 
             if idx < len(scenes) - 1 or lang_key != "spanish":
                 time.sleep(sleep_between_requests)
@@ -268,19 +274,34 @@ Pass only if the image is text-free, content-specific, safe, visually coherent, 
             ],
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
-        parsed_raw = parse_json_response(response.text or "{}")
+        raw_text = response.text or ""
+        if not raw_text.strip():
+            return {
+                "status": "failed",
+                "issues": ["Image QA returned an empty response."],
+                "repair_instruction": "Regenerate with a content-specific, text-free scene.",
+            }
+        parsed_raw = parse_json_response(raw_text)
         parsed = parsed_raw if isinstance(parsed_raw, dict) else {}
         status = str(parsed.get("status", "")).lower()
         if status not in {"passed", "failed"}:
-            return {"status": "passed", "issues": [], "repair_instruction": ""}
+            return {
+                "status": "failed",
+                "issues": [f"Image QA returned invalid status: {status or 'missing'}."],
+                "repair_instruction": "Regenerate and return a valid passed/failed QA decision.",
+            }
         return {
             "status": status,
             "issues": [str(issue) for issue in parsed.get("issues", []) or []],
             "repair_instruction": str(parsed.get("repair_instruction", "")),
         }
     except Exception as exc:
-        log.warning("Image QA skipped for %s: %s", image_path, exc)
-        return {"status": "passed", "issues": [], "repair_instruction": ""}
+        log.warning("Image QA failed for %s: %s", image_path, exc)
+        return {
+            "status": "failed",
+            "issues": [f"Image QA could not parse or validate the review response: {exc}"],
+            "repair_instruction": "Regenerate with a content-specific, text-free scene and rerun QA.",
+        }
 
 
 def _image_repair_instruction(review: dict[str, Any]) -> str:

@@ -52,6 +52,7 @@ class PipelineState(TypedDict, total=False):
     visual_brief: dict[str, Any]
     creative_candidates: dict[str, Any]
     creative_scores: dict[str, Any]
+    meme_plan_quality_reports: dict[str, Any]
     meme_plan: dict[str, Any]
     meme_plan_raw_text: str
     image_paths: dict[str, dict[str, str]]

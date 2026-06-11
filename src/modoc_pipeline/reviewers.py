@@ -224,6 +224,105 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
     )
 
 
+def validate_meme_plan_quality(
+    *,
+    meme_plan: dict[str, Any],
+    creative_scores: dict[str, Any],
+    scripts: dict[str, Any],
+) -> dict[str, Any]:
+    payload = build_meme_plan_quality_reports(
+        meme_plan=meme_plan,
+        creative_scores=creative_scores,
+        scripts=scripts,
+    )
+    assert_meme_plan_quality(payload)
+    return payload
+
+
+def build_meme_plan_quality_reports(
+    *,
+    meme_plan: dict[str, Any],
+    creative_scores: dict[str, Any],
+    scripts: dict[str, Any],
+) -> dict[str, Any]:
+    reports = [
+        deterministic_creative_report(meme_plan, creative_scores, scripts=scripts),
+        deterministic_meme_text_report(scripts, meme_plan),
+        deterministic_visual_prompt_report(meme_plan),
+    ]
+    return {report.stage: report.model_dump() for report in reports}
+
+
+def assert_meme_plan_quality(reports: dict[str, Any]) -> None:
+    failed = [
+        report
+        for report in reports.values()
+        if isinstance(report, dict) and report.get("status") == "failed"
+    ]
+    if failed:
+        summary = "; ".join(
+            f"{report.get('stage')}: {report.get('summary') or report.get('repair_instruction')}"
+            for report in failed
+        )
+        raise ValueError(f"Meme plan quality validation failed: {summary}")
+
+
+def expected_scene_audio_ids(
+    meme_plan: dict[str, Any],
+    languages: set[str] | None = None,
+) -> dict[str, set[str]]:
+    expected: dict[str, set[str]] = {}
+    for lang in _requested_languages(meme_plan, languages):
+        scenes = meme_plan.get(lang, {}).get("scenes", []) or []
+        scene_ids = {
+            str(scene.get("scene_id", "")).strip()
+            for scene in scenes
+            if isinstance(scene, dict)
+            and str(scene.get("scene_id", "")).strip()
+            and str(scene.get("tts_text", "")).strip()
+        }
+        if scene_ids:
+            expected[lang] = scene_ids
+    return expected
+
+
+def assert_tts_complete(
+    *,
+    audio_paths: dict[str, dict[str, Any]],
+    meme_plan: dict[str, Any],
+    languages: set[str] | None = None,
+) -> None:
+    expected = expected_scene_audio_ids(meme_plan, languages)
+    missing: list[str] = []
+    for lang, scene_ids in expected.items():
+        generated = set((audio_paths.get(lang) or {}).keys())
+        for scene_id in sorted(scene_ids - generated):
+            missing.append(f"{lang}/{scene_id}")
+    if missing:
+        raise RuntimeError(f"TTS generation missing required scene audio: {', '.join(missing)}")
+
+
+def assert_bgm_complete(
+    *,
+    bgm_paths: dict[str, Any],
+    meme_plan: dict[str, Any],
+    languages: set[str] | None = None,
+) -> None:
+    expected = _requested_languages(meme_plan, languages)
+    missing = [lang for lang in expected if lang not in bgm_paths]
+    if missing:
+        raise RuntimeError(f"BGM generation missing required languages: {', '.join(missing)}")
+
+
+def _requested_languages(meme_plan: dict[str, Any], languages: set[str] | None) -> list[str]:
+    requested = languages or {"english", "korean", "spanish"}
+    return [
+        lang
+        for lang in ("english", "korean", "spanish")
+        if lang in requested and isinstance(meme_plan.get(lang), dict)
+    ]
+
+
 def _semantic_visual_mismatch(scene: dict[str, Any], lowered_prompt: str) -> str:
     tts = str(scene.get("tts_text", "")).strip().lower()
     if not tts:

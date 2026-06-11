@@ -24,6 +24,12 @@ from ..imagen_client import generate_meme_images, load_imagen_config
 from ..io_utils import write_json, write_text
 from ..meme_planner import generate_meme_plan
 from ..renderer import render_meme_slideshow
+from ..reviewers import (
+    assert_bgm_complete,
+    assert_meme_plan_quality,
+    assert_tts_complete,
+    build_meme_plan_quality_reports,
+)
 from ..tts_client import generate_meme_gemini_tts, load_tts_config
 from .state import PipelineState
 
@@ -151,6 +157,13 @@ def meme_planner_agent_node(state: PipelineState) -> PipelineState:
         write_json(Path(state["run_dir"]) / "creative_candidates.json", result.creative_candidates)
         write_json(Path(state["run_dir"]) / "creative_scores.json", result.creative_scores)
         write_text(Path(state["run_dir"]) / "raw_meme_plan_response.txt", result.raw_text)
+        quality_reports = build_meme_plan_quality_reports(
+            meme_plan=result.parsed,
+            creative_scores=result.creative_scores,
+            scripts=state.get("scripts", {}),
+        )
+        write_json(Path(state["run_dir"]) / "meme_plan_quality_reports.json", quality_reports)
+        assert_meme_plan_quality(quality_reports)
         updated = dict(state)
         updated.update(
             {
@@ -160,6 +173,7 @@ def meme_planner_agent_node(state: PipelineState) -> PipelineState:
                 "visual_brief": result.visual_brief,
                 "creative_candidates": result.creative_candidates,
                 "creative_scores": result.creative_scores,
+                "meme_plan_quality_reports": quality_reports,
                 "topic": topic,
             }
         )
@@ -201,13 +215,16 @@ def tts_agent_node(state: PipelineState) -> PipelineState:
                 languages=_languages_set(state),
             )
         audio_paths = {lang: {sid: str(path) for sid, path in scenes.items()} for lang, scenes in result.items()}
+        assert_tts_complete(
+            audio_paths=audio_paths,
+            meme_plan=state.get("meme_plan", {}),
+            languages=_languages_set(state),
+        )
         updated = dict(state)
         updated["audio_paths"] = audio_paths
         return _trace(updated, "tts_agent", "succeeded", f"{sum(len(v) for v in audio_paths.values())} audio files", started)
     except Exception as exc:
-        updated = _trace(state, "tts_agent", "failed", f"non-fatal: {exc}", started)
-        updated["audio_paths"] = {}
-        return updated
+        return _fail(state, "tts_agent", exc, started)
 
 
 def bgm_agent_node(state: PipelineState) -> PipelineState:
@@ -225,13 +242,16 @@ def bgm_agent_node(state: PipelineState) -> PipelineState:
                 languages=_languages_set(state),
             )
         bgm_paths = {lang: str(path) for lang, path in result.items()}
+        assert_bgm_complete(
+            bgm_paths=bgm_paths,
+            meme_plan=state.get("meme_plan", {}),
+            languages=_languages_set(state),
+        )
         updated = dict(state)
         updated["bgm_paths"] = bgm_paths
         return _trace(updated, "bgm_agent", "succeeded", ", ".join(bgm_paths) or "no bgm", started)
     except Exception as exc:
-        updated = _trace(state, "bgm_agent", "failed", f"non-fatal: {exc}", started)
-        updated["bgm_paths"] = {}
-        return updated
+        return _fail(state, "bgm_agent", exc, started)
 
 
 def render_agent_node(state: PipelineState) -> PipelineState:

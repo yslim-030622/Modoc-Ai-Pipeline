@@ -2,9 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from modoc_pipeline.cli import build_parser
 from modoc_pipeline.dashboard import build_runs_payload
+from modoc_pipeline.imagen_client import ImagenConfig, _review_scene_image
 from modoc_pipeline.meme_planner import (
     _build_candidate_prompt,
     _build_plan_prompt,
@@ -14,10 +16,12 @@ from modoc_pipeline.meme_planner import (
     _parse_score_set,
 )
 import modoc_pipeline.orchestration.graph as graph_module
-from modoc_pipeline.orchestration.nodes import route_after_failure
+from modoc_pipeline.orchestration.nodes import bgm_agent_node, route_after_failure, tts_agent_node
 from modoc_pipeline.orchestration.state import PipelineState, ReviewReport
 from modoc_pipeline.prompt_profiles import load_campaign_profile
 from modoc_pipeline.reviewers import (
+    assert_bgm_complete,
+    assert_tts_complete,
     deterministic_creative_report,
     deterministic_meme_text_report,
     deterministic_visual_prompt_report,
@@ -246,6 +250,103 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertIn("scene_visual_action", combined)
         self.assertIn("shot_type", combined)
         self.assertIn("Do not make medical infographics", combined)
+        self.assertNotIn("For ALL topics", combined)
+        self.assertIn("calm-bright", combined)
+        self.assertIn("brightness <= 0.92", combined)
+
+    def test_audio_coverage_helpers_fail_when_required_outputs_are_missing(self):
+        plan = {
+            "english": {
+                "scenes": [
+                    {"scene_id": "scene_01", "tts_text": "Supported point."},
+                    {"scene_id": "scene_02", "tts_text": "Safety caveat."},
+                ]
+            },
+            "korean": {"scenes": [{"scene_id": "scene_01", "tts_text": "안전 문장."}]},
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "english/scene_02"):
+            assert_tts_complete(
+                audio_paths={"english": {"scene_01": Path("scene_01.wav")}},
+                meme_plan=plan,
+                languages={"english"},
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "korean"):
+            assert_bgm_complete(
+                bgm_paths={"english": Path("english_bgm.mp3")},
+                meme_plan=plan,
+                languages={"english", "korean"},
+            )
+
+    def test_tts_and_bgm_nodes_fail_closed_on_missing_outputs_but_skip_tts_allows_skip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_state = {
+                "run_dir": tmp,
+                "meme_plan": {
+                    "english": {
+                        "scenes": [{"scene_id": "scene_01", "tts_text": "Supported point."}]
+                    }
+                },
+                "languages": ["english"],
+                "api_key": "unused",
+                "agent_trace": [],
+            }
+
+            with patch("modoc_pipeline.orchestration.nodes.load_tts_config", return_value=object()), patch(
+                "modoc_pipeline.orchestration.nodes.generate_meme_gemini_tts",
+                return_value={"english": {}},
+            ):
+                tts_state = tts_agent_node(base_state)
+
+            self.assertEqual(tts_state["failure_status"], "failed")
+            self.assertIn("TTS generation missing", tts_state["failure_message"])
+
+            with patch("modoc_pipeline.orchestration.nodes.generate_all_bgm", return_value={}):
+                bgm_state = bgm_agent_node(base_state)
+
+            self.assertEqual(bgm_state["failure_status"], "failed")
+            self.assertIn("BGM generation missing", bgm_state["failure_message"])
+
+            skipped = tts_agent_node({**base_state, "skip_tts": True})
+            self.assertNotIn("failure_status", skipped)
+            self.assertEqual(skipped["audio_paths"], {})
+
+    def test_image_qa_fails_closed_for_invalid_status_and_invalid_json(self):
+        class FakeModels:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+            def generate_content(self, **kwargs):
+                return type("FakeResponse", (), {"text": self.text})()
+
+        class FakeClient:
+            def __init__(self, text: str) -> None:
+                self.models = FakeModels(text)
+
+        config = ImagenConfig(api_key="unused", model="image-model")
+        scene = {"scene_id": "scene_01", "tts_text": "Supported point.", "primary_prop": "phone"}
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "scene.png"
+            image_path.write_bytes(b"not-a-real-png-but-not-read-by-fake-client")
+
+            invalid_status = _review_scene_image(
+                client=FakeClient('{"status":"unclear"}'),
+                config=config,
+                image_path=image_path,
+                scene=scene,
+                visual_brief={},
+            )
+            invalid_json = _review_scene_image(
+                client=FakeClient("not json"),
+                config=config,
+                image_path=image_path,
+                scene=scene,
+                visual_brief={},
+            )
+
+        self.assertEqual(invalid_status["status"], "failed")
+        self.assertEqual(invalid_json["status"], "failed")
 
     def test_visual_prompt_validation_rejects_repetitive_scene_plans(self):
         scenes = []

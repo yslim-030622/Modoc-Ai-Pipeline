@@ -20,6 +20,12 @@ from .orchestration.graph import build_pipeline_graph
 from .renderer import render_meme_slideshow
 from .bgm_client import generate_all_bgm
 from .dashboard import serve_dashboard
+from .reviewers import (
+    assert_bgm_complete,
+    assert_meme_plan_quality,
+    assert_tts_complete,
+    build_meme_plan_quality_reports,
+)
 
 
 DEFAULT_INPUT = "Q&A Blog Contents List.xlsx"
@@ -262,6 +268,13 @@ def _run_meme_for_run_dir(
             write_json(run_dir / "creative_candidates.json", result.creative_candidates)
             write_json(run_dir / "creative_scores.json", result.creative_scores)
             write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
+            quality_reports = build_meme_plan_quality_reports(
+                meme_plan=result.parsed,
+                creative_scores=result.creative_scores,
+                scripts=scripts,
+            )
+            write_json(run_dir / "meme_plan_quality_reports.json", quality_reports)
+            assert_meme_plan_quality(quality_reports)
             meme_plan = result.parsed
         print("  Done.")
     except Exception as exc:
@@ -291,23 +304,34 @@ def _run_meme_for_run_dir(
         try:
             with timed_stage(run_dir, "tts"):
                 tts_config = load_tts_config()
-                generate_meme_gemini_tts(
+                audio_result = generate_meme_gemini_tts(
                     meme_plan=meme_plan,
                     output_dir=run_dir / "meme_audio",
                     config=tts_config,
                     languages=languages,
                 )
+                assert_tts_complete(
+                    audio_paths=audio_result,
+                    meme_plan=meme_plan,
+                    languages=languages,
+                )
         except Exception as exc:
-            print(f"  TTS failed (non-fatal, continuing without audio): {exc}")
+            print(f"  TTS failed: {exc}")
+            return False
 
         try:
             with timed_stage(run_dir, "bgm"):
                 bgm_dir = run_dir / "meme_bgm"
                 bgm_result = generate_all_bgm(output_dir=bgm_dir, api_key=api_key, meme_plan=meme_plan, languages=languages)
+                assert_bgm_complete(
+                    bgm_paths=bgm_result,
+                    meme_plan=meme_plan,
+                    languages=languages,
+                )
             print(f"  BGM generated for: {', '.join(bgm_result.keys())}")
         except Exception as exc:
-            print(f"  BGM failed (non-fatal, continuing without BGM): {exc}")
-            bgm_dir = None
+            print(f"  BGM failed: {exc}")
+            return False
     else:
         print("\n[4/5] tts + bgm — skipped (--skip-tts).")
 
@@ -397,6 +421,13 @@ def run_meme_plan(args: argparse.Namespace) -> int:
         write_json(run_dir / "creative_candidates.json", result.creative_candidates)
         write_json(run_dir / "creative_scores.json", result.creative_scores)
         write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
+        quality_reports = build_meme_plan_quality_reports(
+            meme_plan=result.parsed,
+            creative_scores=result.creative_scores,
+            scripts=scripts,
+        )
+        write_json(run_dir / "meme_plan_quality_reports.json", quality_reports)
+        assert_meme_plan_quality(quality_reports)
         write_json(
             run_dir / "meme_status.json",
             {
@@ -623,6 +654,13 @@ def run_meme_all(args: argparse.Namespace) -> int:
         write_json(run_dir / "creative_candidates.json", result.creative_candidates)
         write_json(run_dir / "creative_scores.json", result.creative_scores)
         write_text(run_dir / "raw_meme_plan_response.txt", result.raw_text)
+        quality_reports = build_meme_plan_quality_reports(
+            meme_plan=result.parsed,
+            creative_scores=result.creative_scores,
+            scripts=scripts,
+        )
+        write_json(run_dir / "meme_plan_quality_reports.json", quality_reports)
+        assert_meme_plan_quality(quality_reports)
         meme_plan = result.parsed
         print("  Done.")
     except Exception as exc:
@@ -650,15 +688,21 @@ def run_meme_all(args: argparse.Namespace) -> int:
         try:
             print(f"\n[3/5] meme-tts — generating voiceover with Gemini TTS...")
             tts_config = load_tts_config()
-            generate_meme_gemini_tts(
+            audio_result = generate_meme_gemini_tts(
                 meme_plan=meme_plan,
                 output_dir=run_dir / "meme_audio",
                 config=tts_config,
                 languages=languages,
             )
+            assert_tts_complete(
+                audio_paths=audio_result,
+                meme_plan=meme_plan,
+                languages=languages,
+            )
             print("  Done.")
         except Exception as exc:
-            print(f"  meme-tts failed (non-fatal, continuing without audio): {exc}")
+            print(f"  meme-tts failed: {exc}")
+            return 1
     else:
         print("\n[3/5] meme-tts — skipped (--skip-tts).")
 
@@ -674,10 +718,15 @@ def run_meme_all(args: argparse.Namespace) -> int:
                 meme_plan=meme_plan,
                 languages=languages,
             )
+            assert_bgm_complete(
+                bgm_paths=bgm_result,
+                meme_plan=meme_plan,
+                languages=languages,
+            )
             print(f"  Generated BGM for: {', '.join(bgm_result.keys())}")
         except Exception as exc:
-            print(f"  BGM generation failed (non-fatal, continuing without BGM): {exc}")
-            bgm_dir = None
+            print(f"  BGM generation failed: {exc}")
+            return 1
     else:
         print("\n[4/5] bgm — skipped (--skip-tts).")
 

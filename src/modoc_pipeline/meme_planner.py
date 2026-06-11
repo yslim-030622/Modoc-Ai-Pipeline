@@ -142,10 +142,13 @@ def _stage1_search_trends(
             parsed = TrendResearch.model_validate(parse_json_response(raw)).model_dump()
         except Exception:
             parsed = TrendResearch().model_dump()
+            parsed["fallback_reason"] = "trend_search_response_unparseable"
         return raw, parsed, search_metadata
     except Exception as exc:
         log.warning("Meme trend search failed (%s); using empty trends.", exc)
-        return "{}", TrendResearch().model_dump(), {}
+        parsed = TrendResearch().model_dump()
+        parsed["fallback_reason"] = f"trend_search_failed: {exc}"
+        return json.dumps(parsed, ensure_ascii=False), parsed, {}
 
 
 def _build_search_prompt(topic: str, *, campaign_profile: dict[str, Any] | None = None) -> str:
@@ -462,13 +465,13 @@ Rules:
 - Prefer one reusable video-level caregiver identity across all languages. Keep
   character_sheet neutral and well-rested unless the source medical script
   specifically requires fatigue or a night scenario.
-- bgm_prompt should specify a trending, upbeat short-form style: ukulele, claps, light percussion,
-  bouncy indie-pop or Latin-pop, immediate catchy hook in the first 2 seconds, cheerful viral energy.
+- bgm_prompt should specify a bright, voiceover-safe short-form instrumental style: ukulele, claps, light percussion,
+  bouncy indie-pop or Latin-pop, immediate catchy hook in the first 2 seconds.
   No vocals, no humming, no lyrics, room for voiceover. Avoid generic "parent-friendly" clichés.
-- BGM must feel like a trending TikTok/Reels track — bright, bouncy, and instantly engaging.
-  For serious medical topics, stay upbeat and cheerful; never go somber or dark.
+- BGM should feel current and engaging without overpowering narration.
+  For serious medical topics, use calm-bright, voiceover-safe energy instead of high intensity.
 - bgm_config must include bpm, density, brightness, guidance, temperature.
-- Prefer bpm 116-122, density 0.62-0.68, brightness 0.90-0.96, guidance 3.3-3.8.
+- Prefer bpm 116-122, density 0.62-0.68, brightness 0.88-0.92, guidance 3.3-3.8.
 - scene_beats must be exactly 4 short beats: hook, tension, insight, relief.
 - Captions must not mention unsupported home remedies, folk treatments, emergency
   rooms, or urgent care unless those concepts appear in the medical script.
@@ -791,8 +794,8 @@ LANGUAGE FIELDS:
 - caption_style must be one of: impact, clean_reels, korean_jjal, spanish_social.
 - bgm_prompt must sound like a trending TikTok/Reels track: ukulele, claps, bouncy indie-pop or Latin-pop,
   immediate hook in the first 2 seconds. No vocals, no humming, no artist names, room for voiceover.
-- bgm_config should fit the selected BGM prompt: prefer bpm 116-122, brightness 0.90-0.96, density 0.62-0.68.
-- For ALL topics including serious medical ones, BGM must stay bright, bouncy, and cheerful — never somber.
+- bgm_config should fit the selected BGM prompt: prefer bpm 116-122, brightness 0.88-0.92, density 0.62-0.68.
+- For serious medical topics, keep BGM calm-bright and voiceover-safe: brightness <= 0.92 and density <= 0.86.
 - Captions must not add unsupported urgency or remedies. Do not mention emergency
   rooms, urgent care, alcohol/romero, massage, 호박즙, or other folk remedies unless
   the source script explicitly supports them.

@@ -26,6 +26,6 @@
   "bgm_policy": [
     "BGM must be instrumental only, with no vocals, humming, lyrics, or artist names.",
     "Use bright, clean, short-form instrumental music with a catchy first bar and room for voiceover.",
-    "For serious medical topics, stay parent-friendly and voiceover-safe without making the music somber or low-energy."
+    "For serious medical topics, use calm-bright, parent-friendly music that stays voiceover-safe: brightness <= 0.92 and density <= 0.86."
   ]
 }
