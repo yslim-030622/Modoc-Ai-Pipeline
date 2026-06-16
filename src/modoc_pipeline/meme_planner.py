@@ -1,20 +1,22 @@
 """Culture-aware meme plan generation via staged Gemini calls.
 
-Stage 1: Google Search grounding to find 2026 trends per language.
+Stage 1: Select medically safe short-form formats from a local trend library.
 Stage 2: Generate three creative candidates per language.
 Stage 3: Judge and select one candidate per language.
 Stage 4: Generate a structured MemePlan from the winning candidates.
 
-Gemini SDK does not allow response_schema + google_search tool in the same
-request (same constraint as grounding.py), so Stage 1 stays free-form.
-Stages 2-4 use response_schema to enforce structure at the API level.
+Set MODOC_TREND_REFRESH=1 to use the legacy web-grounded refresh helper for
+Stage 1. Stages 2-4 use response_schema to enforce structure at the API level.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from google import genai
@@ -26,12 +28,18 @@ from .schemas import ContentVisualBrief, CreativeCandidateSet, CreativeScoreSet,
 
 log = logging.getLogger(__name__)
 
+DEFAULT_TREND_LIBRARY_PATH = Path(__file__).with_name("data") / "trend_library.json"
+TREND_LIBRARY_ENV = "MODOC_TREND_LIBRARY"
+TREND_REFRESH_ENV = "MODOC_TREND_REFRESH"
+TREND_FALLBACK_SOURCE_URL = "repo-local://neutral-evergreen-short-form"
+
 
 @dataclass(frozen=True)
 class MemePlanGeneration:
     parsed: dict[str, Any]
     raw_text: str
     search_metadata: dict[str, Any]
+    trend_sources: dict[str, Any]
     trend_research: dict[str, Any]
     visual_brief: dict[str, Any]
     creative_candidates: dict[str, Any]
@@ -50,17 +58,19 @@ def generate_meme_plan(
     client = genai.Client(api_key=api_key)
     profile = campaign_profile or load_campaign_profile(campaign_profile_path)
 
-    trends_json, trend_research, search_metadata = _stage1_search_trends(
-        client,
-        model=model,
-        topic=topic,
-        campaign_profile=profile,
-    )
     visual_brief_raw, visual_brief = _stage2_generate_visual_brief(
         client,
         model=model,
         scripts=scripts,
         topic=topic,
+        campaign_profile=profile,
+    )
+    trends_json, trend_research, trend_sources = _stage1_select_trends(
+        client,
+        model=model,
+        scripts=scripts,
+        topic=topic,
+        visual_brief=visual_brief,
         campaign_profile=profile,
     )
     candidates_raw, candidates = _stage2_generate_candidates(
@@ -100,6 +110,7 @@ def generate_meme_plan(
             "creative_scores_raw": scores_raw,
             "final_meme_plan_raw": raw_text,
             "campaign_profile": profile,
+            "trend_sources": trend_sources,
         },
         ensure_ascii=False,
         indent=2,
@@ -107,7 +118,8 @@ def generate_meme_plan(
     return MemePlanGeneration(
         parsed=parsed,
         raw_text=combined_raw,
-        search_metadata=search_metadata,
+        search_metadata=trend_sources,
+        trend_sources=trend_sources,
         trend_research=trend_research,
         visual_brief=visual_brief,
         creative_candidates=candidates,
@@ -116,7 +128,356 @@ def generate_meme_plan(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 1: Google Search grounding (cannot use response_schema with search tool)
+# Stage 1: Local trend library selection, with optional web-grounded refresh
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _stage1_select_trends(
+    client: genai.Client,
+    *,
+    model: str,
+    scripts: dict[str, Any],
+    topic: str,
+    visual_brief: dict[str, Any],
+    campaign_profile: dict[str, Any],
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Return TrendResearch-compatible formats selected for this source row.
+
+    Default generation is deterministic and offline: it selects from a curated
+    repo-local trend library. MODOC_TREND_REFRESH=1 keeps the old Google Search
+    helper available for manual refresh/audit runs.
+    """
+    if _trend_refresh_enabled():
+        raw, parsed, metadata = _stage1_search_trends(
+            client,
+            model=model,
+            topic=topic,
+            campaign_profile=campaign_profile,
+        )
+        normalized = _normalize_refresh_trends(
+            parsed,
+            topic=topic,
+            scripts=scripts,
+            visual_brief=visual_brief,
+            metadata=metadata,
+        )
+        sources = _build_trend_sources(
+            mode="google_search_refresh",
+            trend_research=normalized,
+            metadata=metadata,
+        )
+        return raw, normalized, sources
+
+    library, library_path, load_error = _load_trend_library()
+    selected = _select_trends_from_library(
+        library,
+        topic=topic,
+        scripts=scripts,
+        visual_brief=visual_brief,
+        campaign_profile=campaign_profile,
+    )
+    sources = _build_trend_sources(
+        mode="local_library",
+        trend_research=selected,
+        metadata={
+            "library_path": str(library_path),
+            "library_version": library.get("version"),
+            "library_updated_at": library.get("updated_at"),
+            "load_error": load_error,
+        },
+    )
+    raw = json.dumps(
+        {
+            "mode": "local_library",
+            "library_path": str(library_path),
+            "library_version": library.get("version"),
+            "library_updated_at": library.get("updated_at"),
+            "selected": selected,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    return raw, selected, sources
+
+
+def _trend_refresh_enabled() -> bool:
+    return os.getenv(TREND_REFRESH_ENV, "0").strip().lower() in {"1", "true", "yes"}
+
+
+def _load_trend_library(path: str | Path | None = None) -> tuple[dict[str, Any], Path, str]:
+    configured = path or os.getenv(TREND_LIBRARY_ENV, "").strip()
+    library_path = Path(configured) if configured else DEFAULT_TREND_LIBRARY_PATH
+    try:
+        with library_path.open("r", encoding="utf-8") as handle:
+            library = json.load(handle)
+        if not isinstance(library, dict) or not isinstance(library.get("trends"), list):
+            raise ValueError("trend library must be an object with a trends list")
+        return library, library_path, ""
+    except Exception as exc:
+        log.warning("Could not load trend library %s: %s", library_path, exc)
+        return _fallback_trend_library(), library_path, str(exc)
+
+
+def _fallback_trend_library() -> dict[str, Any]:
+    trends: list[dict[str, Any]] = []
+    for lang, hook in (
+        ("english", "Here is the calm rule parents can use."),
+        ("korean", "이럴 땐 이 기준부터 확인하세요."),
+        ("spanish", "Esta es la regla tranquila para decidir."),
+    ):
+        trends.append(
+            {
+                "format_archetype": "neutral_education",
+                "language": lang,
+                "platforms": ["Instagram Reels", "YouTube Shorts"],
+                "hook_patterns": [hook],
+                "visual_rhythm": "simple hook, one concrete caregiver action, calm final step",
+                "caption_density": "medium",
+                "audio_mood": "calm-bright instrumental, no vocals, room for voiceover",
+                "medical_fit": "safe",
+                "avoid_when": ["fear bait", "diagnosis bait"],
+                "example_topics": ["general", "fever_triage", "gi_hydration", "medication_dosing"],
+                "source_urls": [TREND_FALLBACK_SOURCE_URL],
+                "confidence": 0.5,
+            }
+        )
+    return {"version": "fallback", "updated_at": "", "trends": trends}
+
+
+def _select_trends_from_library(
+    library: dict[str, Any],
+    *,
+    topic: str,
+    scripts: dict[str, Any],
+    visual_brief: dict[str, Any],
+    campaign_profile: dict[str, Any],
+) -> dict[str, Any]:
+    content_type = str(visual_brief.get("content_type") or "general")
+    topic_text = _trend_topic_text(topic=topic, scripts=scripts, visual_brief=visual_brief)
+    trends = [item for item in library.get("trends", []) if isinstance(item, dict)]
+    selected: dict[str, list[dict[str, Any]]] = {}
+    for lang in ("english", "korean", "spanish"):
+        lang_items = [
+            _trend_item_to_format(
+                item,
+                lang=lang,
+                score=_score_trend_item(item, topic_text=topic_text, content_type=content_type),
+                content_type=content_type,
+            )
+            for item in trends
+            if str(item.get("language", "")).lower() == lang
+        ]
+        safe_items = [item for item in lang_items if item.get("medical_fit") != "avoid"]
+        ranked = sorted(safe_items or lang_items, key=lambda item: float(item.get("score", 0.0)), reverse=True)
+        if not ranked:
+            ranked = [
+                _trend_item_to_format(
+                    item,
+                    lang=lang,
+                    score=_score_trend_item(item, topic_text=topic_text, content_type=content_type),
+                    content_type=content_type,
+                )
+                for item in _fallback_trend_library()["trends"]
+                if item.get("language") == lang
+            ]
+        selected[lang] = ranked[:5]
+    return TrendResearch.model_validate(selected).model_dump()
+
+
+def _score_trend_item(item: dict[str, Any], *, topic_text: str, content_type: str) -> float:
+    score = float(item.get("confidence") or 0.0) * 2.0
+    medical_fit = str(item.get("medical_fit", "")).lower()
+    if medical_fit == "safe":
+        score += 3.0
+    elif medical_fit == "review":
+        score += 1.0
+    elif medical_fit == "avoid":
+        score -= 6.0
+
+    examples = [str(value).lower() for value in item.get("example_topics", []) or []]
+    if content_type.lower() in examples:
+        score += 4.0
+    elif "general" in examples:
+        score += 0.75
+
+    avoid_tokens = [str(value).lower() for value in item.get("avoid_when", []) or []]
+    for token in avoid_tokens:
+        if token and (token in topic_text or token == content_type.lower()):
+            score -= 4.0
+
+    density = str(item.get("caption_density", "")).lower()
+    if density == "high":
+        if content_type in {"medication_dosing", "lab_result"}:
+            score += 1.0
+        else:
+            score -= 1.0
+    elif density == "low" and content_type in {"medication_dosing", "lab_result"}:
+        score -= 0.75
+
+    return round(score, 3)
+
+
+def _trend_topic_text(*, topic: str, scripts: dict[str, Any], visual_brief: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            topic,
+            json.dumps(scripts, ensure_ascii=False),
+            json.dumps(visual_brief, ensure_ascii=False),
+        ]
+    ).lower()
+
+
+def _trend_item_to_format(
+    item: dict[str, Any],
+    *,
+    lang: str,
+    score: float,
+    content_type: str,
+) -> dict[str, Any]:
+    archetype = str(item.get("format_archetype") or item.get("format_name") or "neutral_education")
+    platforms = [str(value) for value in item.get("platforms", []) or [] if str(value).strip()]
+    hooks = [str(value) for value in item.get("hook_patterns", []) or item.get("hook_templates", []) or [] if str(value).strip()]
+    avoid_when = [str(value) for value in item.get("avoid_when", []) or item.get("avoid", []) or [] if str(value).strip()]
+    source_urls = [str(value) for value in item.get("source_urls", []) or [] if str(value).strip()]
+    why_this_row_fits = _why_trend_fits(item, content_type=content_type, score=score)
+    return {
+        "format_name": str(item.get("format_name") or archetype.replace("_", " ").title()),
+        "platform": ", ".join(platforms) if platforms else str(item.get("platform") or ""),
+        "hook_templates": hooks,
+        "caption_style": str(item.get("caption_style") or item.get("caption_density") or ""),
+        "visual_editing_style": str(item.get("visual_editing_style") or item.get("visual_rhythm") or ""),
+        "audio_mood": str(item.get("audio_mood") or ""),
+        "why_it_works": str(item.get("why_it_works") or why_this_row_fits),
+        "avoid": avoid_when,
+        "format_archetype": archetype,
+        "language": lang,
+        "platforms": platforms,
+        "hook_patterns": hooks,
+        "visual_rhythm": str(item.get("visual_rhythm") or item.get("visual_editing_style") or ""),
+        "caption_density": str(item.get("caption_density") or ""),
+        "medical_fit": str(item.get("medical_fit") or "review"),
+        "avoid_when": avoid_when,
+        "example_topics": [str(value) for value in item.get("example_topics", []) or [] if str(value).strip()],
+        "source_urls": source_urls,
+        "confidence": float(item.get("confidence") or 0.0),
+        "why_this_row_fits": why_this_row_fits,
+        "score": score,
+    }
+
+
+def _why_trend_fits(item: dict[str, Any], *, content_type: str, score: float) -> str:
+    archetype = str(item.get("format_archetype") or "format")
+    medical_fit = str(item.get("medical_fit") or "review")
+    examples = [str(value).lower() for value in item.get("example_topics", []) or []]
+    if content_type.lower() in examples:
+        return f"{archetype} fits {content_type} with medical_fit={medical_fit} and score={score}."
+    return f"{archetype} is a general short-form option; verify fit for {content_type}. score={score}."
+
+
+def _normalize_refresh_trends(
+    trend_research: dict[str, Any],
+    *,
+    topic: str,
+    scripts: dict[str, Any],
+    visual_brief: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    content_type = str(visual_brief.get("content_type") or "general")
+    topic_text = _trend_topic_text(topic=topic, scripts=scripts, visual_brief=visual_brief)
+    source_urls = [str(item.get("uri")) for item in metadata.get("citations", []) or [] if item.get("uri")]
+    normalized: dict[str, list[dict[str, Any]]] = {}
+    for lang in ("english", "korean", "spanish"):
+        normalized[lang] = []
+        for item in trend_research.get(lang, []) or []:
+            if not isinstance(item, dict):
+                continue
+            refresh_item = {
+                **item,
+                "format_archetype": _archetype_from_refresh_item(item),
+                "language": lang,
+                "platforms": _platforms_from_refresh_item(item),
+                "hook_patterns": item.get("hook_templates") or [],
+                "visual_rhythm": item.get("visual_editing_style") or "",
+                "caption_density": _caption_density_from_text(item.get("caption_style") or ""),
+                "medical_fit": "review",
+                "avoid_when": item.get("avoid") or [],
+                "example_topics": [content_type],
+                "source_urls": source_urls,
+                "confidence": 0.55,
+            }
+            normalized[lang].append(
+                _trend_item_to_format(
+                    refresh_item,
+                    lang=lang,
+                    score=_score_trend_item(refresh_item, topic_text=topic_text, content_type=content_type),
+                    content_type=content_type,
+                )
+            )
+        if not normalized[lang]:
+            normalized[lang] = _select_trends_from_library(
+                _fallback_trend_library(),
+                topic=topic,
+                scripts=scripts,
+                visual_brief=visual_brief,
+                campaign_profile={},
+            )[lang]
+    return TrendResearch.model_validate(normalized).model_dump()
+
+
+def _archetype_from_refresh_item(item: dict[str, Any]) -> str:
+    text = " ".join(
+        str(item.get(key, ""))
+        for key in ("format_name", "caption_style", "visual_editing_style", "why_it_works")
+    ).lower()
+    if any(token in text for token in ("myth", "debunk", "desmit", "팩트", "fact")):
+        return "myth_bust"
+    if any(token in text for token in ("checklist", "list", "save", "체크", "guardar")):
+        return "checklist"
+    if any(token in text for token in ("pov", "parent", "보호자", "padre")):
+        return "pov_parent"
+    if any(token in text for token in ("doctor", "pediatrician", "소아과", "pediatra")):
+        return "doctor_reacts"
+    if any(token in text for token in ("decision", "if", "yes/no", "기준", "si pasa")):
+        return "decision_tree"
+    return "neutral_education"
+
+
+def _platforms_from_refresh_item(item: dict[str, Any]) -> list[str]:
+    platform = str(item.get("platform") or "").strip()
+    if not platform:
+        return []
+    return [part.strip() for part in re.split(r"[,/&]| and ", platform) if part.strip()]
+
+
+def _caption_density_from_text(text: str) -> str:
+    lowered = text.lower()
+    if any(token in lowered for token in ("high", "dense", "bulleted", "checklist", "초압축")):
+        return "high"
+    if any(token in lowered for token in ("minimal", "low", "simple", "짧은")):
+        return "low"
+    return "medium"
+
+
+def _build_trend_sources(
+    *,
+    mode: str,
+    trend_research: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    source_urls: list[str] = []
+    for lang in ("english", "korean", "spanish"):
+        for item in trend_research.get(lang, []) or []:
+            for url in item.get("source_urls", []) or []:
+                if url and url not in source_urls:
+                    source_urls.append(url)
+    return {
+        "mode": mode,
+        "source_urls": source_urls,
+        "metadata": metadata,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional refresh helper: Google Search grounding
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _stage1_search_trends(
@@ -165,15 +526,21 @@ Campaign profile:
 Topic context: {topic}
 
 Return a JSON object with exactly three keys: "english", "korean", "spanish".
-Each value is a list of 3-5 objects with exactly these keys:
+Each value is a list of 3-5 objects with these keys:
+- format_archetype: execution pattern such as myth_bust, decision_tree,
+  doctor_reacts, pov_parent, checklist, before_after, neutral_education
 - format_name
-- platform
-- hook_templates: list of short native caption/hook templates
-- caption_style
-- visual_editing_style
+- platforms: list of platforms where this format appears
+- hook_patterns: list of short native caption/hook patterns
+- visual_rhythm: concrete edit/composition rhythm
+- caption_density: low, medium, or high
 - audio_mood
-- why_it_works
-- avoid: list of cliches or stale formats to avoid
+- medical_fit: safe, review, or avoid for pediatric health education
+- avoid_when: list of cases where this trend should not be used
+- example_topics: list of content_type values this trend fits
+- source_urls: list of supporting URLs if available
+- confidence: 0.0-1.0
+- why_this_row_fits
 
 Use the campaign profile's language platform lists for search focus. The example
 below is structural only; do not copy its creative content unless current search
@@ -182,14 +549,19 @@ results support it.
 Example structure:
 {{
   "english": [{{
+    "format_archetype": "myth_bust",
     "format_name": "current searched format name",
-    "platform": "platform where it currently appears",
-    "hook_templates": ["native hook pattern from current search"],
-    "caption_style": "current caption style",
-    "visual_editing_style": "current editing/composition style",
+    "platforms": ["platform where it currently appears"],
+    "hook_patterns": ["native hook pattern from current search"],
+    "visual_rhythm": "current editing/composition style",
+    "caption_density": "medium",
     "audio_mood": "current audio mood",
-    "why_it_works": "why this is current and fits parent education",
-    "avoid": ["stale or unsafe nearby template"]
+    "medical_fit": "safe",
+    "avoid_when": ["stale or unsafe nearby template"],
+    "example_topics": ["fever_triage"],
+    "source_urls": ["https://example.com/source"],
+    "confidence": 0.7,
+    "why_this_row_fits": "why this fits parent education"
   }}],
   "korean": [],
   "spanish": []
@@ -232,11 +604,28 @@ def _extract_search_metadata(response: Any) -> dict[str, Any]:
 CONTENT_VISUAL_GRAMMAR: dict[str, dict[str, list[str]]] = {
     "fever_triage": {
         "allowed_props": ["blank digital thermometer", "water cup", "phone", "light blanket", "sofa", "blank note"],
-        "forbidden_visuals": ["thermometer numbers", "red alarm graphics", "hospital bed unless source says hospital", "pills unless medication is in script"],
+        "forbidden_visuals": ["thermometer numbers", "red alarm graphics", "hospital bed unless source says hospital", "visible medicine", "medicine bottle", "oral syringe", "pills", "tablets"],
     },
     "medication_dosing": {
-        "allowed_props": ["unlabeled medicine bottle", "measuring spoon", "oral syringe without numbers", "phone timer", "blank dosing note"],
-        "forbidden_visuals": ["readable labels", "dosage numbers inside image", "loose pills", "brand logos", "needle"],
+        "allowed_props": ["phone with blank screen", "blank dosing note", "closed child-safe storage box", "water cup", "blank pediatrician call card", "clean kitchen counter"],
+        "forbidden_visuals": [
+            "visible medicine",
+            "medicine bottle",
+            "medication bottle",
+            "liquid medicine",
+            "oral syringe",
+            "syringe",
+            "dropper",
+            "measuring spoon",
+            "spoon with medicine",
+            "pills",
+            "tablets",
+            "capsules",
+            "needle",
+            "dosage numbers inside image",
+            "readable labels",
+            "brand logos",
+        ],
     },
     "vaccine_reaction": {
         "allowed_props": ["baby blanket", "tiny bandage sticker", "blank thermometer", "water cup", "phone", "caregiver lap"],
@@ -351,6 +740,11 @@ Rules:
 - Do not put readable text, labels, dosage numbers, calendar numbers, or charts
   inside generated images. Captions are rendered later by the video renderer.
 - Medical precision belongs in captions/TTS; the image should show safe observable action.
+- For medication or dosing rows, DO NOT show medicine, medication bottles,
+  oral syringes, droppers, measuring spoons, pills, tablets, capsules, needles,
+  or a caregiver administering/preparing medicine. Use indirect planning visuals
+  instead: a blank note, phone with blank screen, water cup, closed child-safe
+  storage box, or calm pediatrician call setup.
 
 Return ContentVisualBrief JSON only.
 """.strip()
@@ -365,12 +759,20 @@ def _merge_visual_grammar(brief: dict[str, Any]) -> dict[str, Any]:
     content_type = str(brief.get("content_type") or "general")
     grammar = CONTENT_VISUAL_GRAMMAR.get(content_type) or CONTENT_VISUAL_GRAMMAR["general"]
     allowed = _dedupe_strings([*(brief.get("allowed_props") or []), *grammar["allowed_props"]])[:8]
-    forbidden = _dedupe_strings([*(brief.get("forbidden_visuals") or []), *grammar["forbidden_visuals"]])[:12]
+    if content_type == "medication_dosing":
+        allowed = [prop for prop in allowed if not _is_sensitive_medical_visual(prop)][:8]
+    forbidden = _dedupe_strings([*(brief.get("forbidden_visuals") or []), *grammar["forbidden_visuals"]])[:24]
+    must_show = _dedupe_strings(brief.get("must_show") or [])
+    if content_type == "medication_dosing":
+        must_show = [item for item in must_show if not _is_sensitive_medical_visual(item)]
+    must_not_show = _dedupe_strings([*(brief.get("must_not_show") or []), *grammar["forbidden_visuals"]])[:16]
     normalized = ContentVisualBrief.model_validate({
         **brief,
         "content_type": content_type if content_type in CONTENT_VISUAL_GRAMMAR else "general",
         "allowed_props": allowed,
         "forbidden_visuals": forbidden,
+        "must_show": must_show,
+        "must_not_show": must_not_show,
     }).model_dump()
     return normalized
 
@@ -385,6 +787,37 @@ def _dedupe_strings(values: list[Any]) -> list[str]:
             seen.add(key)
             result.append(item)
     return result
+
+
+SENSITIVE_MEDICAL_VISUAL_TERMS = (
+    "medicine bottle",
+    "medication bottle",
+    "unlabeled medicine bottle",
+    "liquid medicine",
+    "visible medicine",
+    "oral syringe",
+    "syringe",
+    "dropper",
+    "measuring spoon",
+    "spoon with medicine",
+    "pill",
+    "pills",
+    "tablet",
+    "tablets",
+    "capsule",
+    "capsules",
+    "needle",
+    "injection",
+    "dose cup",
+    "dosing cup",
+)
+
+SAFE_MEDICATION_PLANNING_PROP = "blank dosing note"
+
+
+def _is_sensitive_medical_visual(text: str) -> bool:
+    lowered = str(text).lower()
+    return any(term in lowered for term in SENSITIVE_MEDICAL_VISUAL_TERMS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -452,6 +885,13 @@ Rules:
 - Output valid JSON only.
 - Each candidate must be medically safe, parent-facing, current, and culturally native.
 - Every candidate's trend_rationale must explain which trend research item it adapts.
+- Build from executable trend fields, not from catchy trend names alone:
+  format_archetype, hook_patterns, visual_rhythm, caption_density,
+  medical_fit, why_this_row_fits, and score are binding.
+- Prefer trends with medical_fit="safe". Use medical_fit="review" only when it
+  clearly improves parent understanding. Never select medical_fit="avoid".
+- The candidate's creative_angle should name the format_archetype and the row
+  situation, not a forced meme label or slang phrase.
 - Do not use banned_templates from the campaign profile.
 - If trend research is empty or weak, choose a neutral evergreen short-form pattern
   and say that clearly in trend_rationale.
@@ -459,6 +899,10 @@ Rules:
 - Use language notes from the campaign profile, not stereotype templates.
 - The visual concept and scene_beats must fit the row-specific visual brief's
   content_type, allowed_props, must_show, and must_not_show.
+- Treat medication bottles, oral syringes, droppers, measuring spoons, pills,
+  tablets, capsules, needles, and visible liquid medicine as sensitive visuals.
+  Do not include them in scene_beats, safe_props, primary_prop, or image_prompt,
+  even for medication_dosing rows.
 - Do not default to generic plants, coffee mugs, sunny windows, or static
   caregiver poses unless the visual brief makes them relevant.
 - visual_style_anchor and character_sheet must be concrete and fully described for image consistency.
@@ -626,6 +1070,7 @@ def _stage4_generate_plan(
     except Exception:
         parsed = _parse_meme_plan(raw_text, topic=topic, candidates=candidates, scores=scores)
     parsed["visual_brief"] = _merge_visual_grammar(parsed.get("visual_brief") or visual_brief)
+    parsed = _repair_plan_guardrails(parsed)
     return raw_text, parsed
 
 
@@ -722,9 +1167,11 @@ CONTENT-SPECIFIC VISUAL ANCHORS:
 - Fever rows may use a blank digital thermometer, water cup, blanket, phone, or
   caregiver checking temperature. A simple pediatric exam room or home-care
   setup is allowed. Do not show readable temperature numbers.
-- Medication rows may use an unlabeled medicine bottle, measuring spoon, oral
-  syringe without numbers, phone timer, pharmacy bag, or blank dosing note. Do
-  not show readable labels, loose pills, dosage numbers, brands, or needles.
+- Medication rows must NOT show visible medicine, medication bottles, oral
+  syringes, droppers, measuring spoons, pills, tablets, capsules, needles, or
+  anyone preparing/administering medication. Use indirect planning props only:
+  phone with blank screen, blank dosing note, closed child-safe storage box,
+  water cup, clean counter, or calm pediatrician call setup.
 - Vaccine reaction rows may use a baby blanket, tiny bandage sticker, blank
   thermometer, water cup, phone, caregiver lap, waiting-room chair, or clinic
   folder. Do not show needles entering skin or vaccine vial text.
@@ -779,6 +1226,8 @@ IMAGE PROMPT RULES:
 - Bad: four scenes of the caregiver standing still with the same mug or phone.
 - Bad: balance scale, blood drop, plant/leaf symbol, traffic light, numbered calendar,
   lab report, medical chart, icon labels, or any text inside the image.
+- Bad: medicine bottle, oral syringe, dropper, measuring spoon, pills, tablets,
+  capsules, needles, visible liquid medicine, or a medicine-preparation scene.
 - Max 120 words. 9:16 vertical.
 - Do not add dark circles, exhausted features, messy-night imagery, or 3am bedroom
   scenes unless the source script specifically needs a night scenario.
@@ -975,6 +1424,186 @@ def _normalize_lang_plan(
         "character_sheet": lang_data.get("character_sheet") or candidate.get("character_sheet") or "",
         "scenes": scenes,
     }
+
+
+def _repair_plan_guardrails(plan: dict[str, Any]) -> dict[str, Any]:
+    visual_brief = plan.get("visual_brief") if isinstance(plan.get("visual_brief"), dict) else {}
+    allowed_props = [str(prop).strip().lower() for prop in visual_brief.get("allowed_props", []) or [] if str(prop).strip()]
+    for lang in ("english", "korean", "spanish"):
+        lang_plan = plan.get(lang)
+        if not isinstance(lang_plan, dict):
+            continue
+        bgm_prompt = str(lang_plan.get("bgm_prompt", "")).strip()
+        if bgm_prompt and not _prompt_has_voiceover_guardrail(bgm_prompt):
+            lang_plan["bgm_prompt"] = f"{bgm_prompt}. Instrumental, no vocals, no lyrics, room for voiceover."
+        for scene in lang_plan.get("scenes", []) or []:
+            if not isinstance(scene, dict):
+                continue
+            if lang == "korean":
+                scene["top_text"] = _trim_korean_display_text(scene.get("top_text"), 14)
+                scene["bottom_text"] = _trim_korean_display_text(scene.get("bottom_text"), 24)
+            else:
+                scene["top_text"] = _trim_word_display_text(scene.get("top_text"), 6)
+                scene["bottom_text"] = _trim_word_display_text(scene.get("bottom_text"), 8)
+            _repair_scene_visual_prompt(scene, allowed_props)
+    return plan
+
+
+def _repair_scene_visual_prompt(scene: dict[str, Any], allowed_props: list[str]) -> None:
+    prompt = _sanitize_visual_prompt_guardrails(str(scene.get("image_prompt", "")).strip())
+    if not prompt:
+        return
+    if _is_sensitive_medical_visual(str(scene.get("primary_prop", ""))):
+        scene["primary_prop"] = _first_allowed_prop(allowed_props, (SAFE_MEDICATION_PLANNING_PROP, "phone with blank screen", "water cup")) or SAFE_MEDICATION_PLANNING_PROP
+    scene["safe_props"] = [
+        str(prop)
+        for prop in scene.get("safe_props", []) or []
+        if not _is_sensitive_medical_visual(str(prop))
+    ]
+    if not scene["safe_props"] and scene.get("primary_prop"):
+        scene["safe_props"] = [scene["primary_prop"]]
+    if _is_sensitive_medical_visual(prompt):
+        prompt = _replace_sensitive_medication_visuals(prompt)
+    lowered_prompt = prompt.lower()
+    primary_prop = str(scene.get("primary_prop", "")).strip()
+    additions: list[str] = []
+    if primary_prop and primary_prop.lower() not in lowered_prompt:
+        additions.append(f"Visible {primary_prop}.")
+
+    tts = str(scene.get("tts_text", "")).lower()
+    if _has_any_token(tts, ("fever", "열", "fiebre", "temperature", "38도", "39도", "40도")) and not _has_any_token(
+        lowered_prompt,
+        ("thermometer", "water", "medicine", "medication", "light clothing", "blanket", "monitoring", "해열", "체온", "물", "termómetro", "agua"),
+    ):
+        fever_prop = _first_allowed_prop(
+            allowed_props,
+            ("blank digital thermometer", "water cup", "light blanket", "phone"),
+        )
+        if fever_prop:
+            additions.append(f"Visible {fever_prop} for calm fever monitoring, no readable numbers.")
+
+    if _has_emergency_tts(tts) and not _has_any_token(
+        lowered_prompt,
+        ("phone", "pediatric", "doctor", "clinic", "warning", "monitoring", "caregiver watching", "breathing", "응급", "소아과", "urgencias", "médico"),
+    ):
+        triage_prop = _first_allowed_prop(allowed_props, ("phone", "blank note", "clinic folder"))
+        if triage_prop:
+            additions.append(f"Visible {triage_prop} for calm pediatric triage planning.")
+
+    if additions:
+        scene["image_prompt"] = f"{prompt} {' '.join(additions)}"
+        prompt = scene["image_prompt"]
+    lowered_prompt = prompt.lower()
+    if not all(guard in lowered_prompt for guard in ("no text", "no letters", "no signs", "no logos")):
+        scene["image_prompt"] = f"{prompt} No text, no letters, no signs, no logos."
+    if _is_sensitive_medical_visual(scene["image_prompt"]):
+        scene["image_prompt"] = _replace_sensitive_medication_visuals(scene["image_prompt"])
+
+
+def _sanitize_visual_prompt_guardrails(prompt: str) -> str:
+    prompt = re.sub(
+        r"\bwithout\s+any\s+text,\s*logos?,\s*or\s*numbers\b",
+        "with blank surfaces and no readable markings",
+        prompt,
+        flags=re.IGNORECASE,
+    )
+    prompt = re.sub(
+        r"\bwithout\s+text,\s*logos?,\s*or\s*numbers\b",
+        "with blank surfaces and no readable markings",
+        prompt,
+        flags=re.IGNORECASE,
+    )
+    prompt = re.sub(
+        r"\bno\s+text,\s*logos?,\s*or\s*(?:high-contrast\s+red\s+)?warning\s+graphics(?:\s+are\s+present)?\b",
+        "plain blank surfaces with no warning graphics",
+        prompt,
+        flags=re.IGNORECASE,
+    )
+    return prompt
+
+
+def _replace_sensitive_medication_visuals(prompt: str) -> str:
+    replacements = (
+        r"\b(?:an?\s+)?unlabeled\s+(?:liquid\s+)?medicine\s+bottle\b",
+        r"\b(?:an?\s+)?(?:medicine|medication)\s+bottle\b",
+        r"\b(?:an?\s+)?oral\s+syringe(?:\s+without\s+numbers)?\b",
+        r"\b(?:an?\s+)?syringe\b",
+        r"\b(?:an?\s+)?dropper\b",
+        r"\b(?:an?\s+)?measuring\s+spoon\b",
+        r"\bspoon\s+with\s+medicine\b",
+        r"\bliquid\s+medicine\b",
+        r"\bvisible\s+medicine\b",
+        r"\bpills?\b",
+        r"\btablets?\b",
+        r"\bcapsules?\b",
+        r"\bneedles?\b",
+        r"\binjections?\b",
+    )
+    cleaned = prompt
+    for pattern in replacements:
+        cleaned = re.sub(pattern, SAFE_MEDICATION_PLANNING_PROP, cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"\b(?:drawing|filling|preparing|administering|measuring)\s+[^.]{0,80}\b",
+        "reviewing a blank dosing note",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    guardrail = (
+        "No visible medicine, medication bottles, syringes, droppers, measuring spoons, "
+        "pills, tablets, capsules, needles, or medication preparation."
+    )
+    return f"{cleaned} {guardrail}" if "no visible medicine" not in cleaned.lower() else cleaned
+
+
+def _trim_korean_display_text(value: Any, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip(" ,.;:!?…") + "…"
+
+
+def _trim_word_display_text(value: Any, max_words: int) -> str:
+    text = str(value or "").strip()
+    words = [part for part in text.replace(":", " ").split() if part.strip()]
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]).rstrip(" ,.;:!?…") + "..."
+
+
+def _prompt_has_voiceover_guardrail(prompt: str) -> bool:
+    lowered = prompt.lower()
+    return _has_any_token(
+        lowered,
+        (
+            "instrumental",
+            "no vocals",
+            "no vocal",
+            "no lyrics",
+            "without vocals",
+            "without lyrics",
+            "lyric-free",
+            "vocal-free",
+            "voiceover-safe",
+            "room for voiceover",
+        ),
+    )
+
+
+def _first_allowed_prop(allowed_props: list[str], preferred: tuple[str, ...]) -> str:
+    for prop in preferred:
+        if any(prop in allowed or allowed in prop for allowed in allowed_props):
+            return prop
+    return ""
+
+
+def _has_emergency_tts(text: str) -> bool:
+    if _has_any_token(text, ("emergency", "urgent", "응급", "urgencias", "unresponsive", "trouble breathing", "경련", "호흡")):
+        return True
+    return re.search(r"(?<![a-z])er(?![a-z])", text) is not None
+
+
+def _has_any_token(text: str, needles: tuple[str, ...]) -> bool:
+    return any(needle in text for needle in needles)
 
 
 def _normalize_scene(scene: dict[str, Any], index: int) -> dict[str, Any]:

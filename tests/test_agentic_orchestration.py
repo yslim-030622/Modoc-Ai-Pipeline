@@ -6,20 +6,26 @@ from unittest.mock import patch
 
 from modoc_pipeline.cli import build_parser
 from modoc_pipeline.dashboard import build_runs_payload
-from modoc_pipeline.imagen_client import ImagenConfig, _review_scene_image
+from modoc_pipeline.imagen_client import ImagenConfig, generate_meme_images, _review_scene_image
 from modoc_pipeline.meme_planner import (
     _build_candidate_prompt,
     _build_plan_prompt,
     _build_visual_brief_prompt,
+    _load_trend_library,
+    _merge_visual_grammar,
     _parse_candidate_set,
     _parse_meme_plan,
     _parse_score_set,
+    _repair_plan_guardrails,
+    _score_trend_item,
+    _select_trends_from_library,
 )
 import modoc_pipeline.orchestration.graph as graph_module
 from modoc_pipeline.orchestration.nodes import bgm_agent_node, route_after_failure, tts_agent_node
 from modoc_pipeline.orchestration.state import PipelineState, ReviewReport
 from modoc_pipeline.prompt_profiles import load_campaign_profile
 from modoc_pipeline.reviewers import (
+    assert_meme_plan_quality,
     assert_bgm_complete,
     assert_tts_complete,
     deterministic_creative_report,
@@ -54,6 +60,33 @@ class AgenticOrchestrationTests(unittest.TestCase):
         )
         self.assertEqual(report.status, "failed")
         self.assertEqual(report.repair_instruction, "Restore source uncertainty.")
+
+    def test_meme_plan_quality_assertion_does_not_fail_closed_on_visual_only_review(self):
+        assert_meme_plan_quality(
+            {
+                "creative_review": {"status": "passed", "stage": "creative_review"},
+                "meme_plan_review": {"status": "passed", "stage": "meme_plan_review"},
+                "visual_prompt_review": {
+                    "status": "failed",
+                    "stage": "visual_prompt_review",
+                    "summary": "Deterministic visual prompt validation failed.",
+                },
+            }
+        )
+
+    def test_meme_plan_quality_assertion_still_fails_on_text_review(self):
+        with self.assertRaises(ValueError):
+            assert_meme_plan_quality(
+                {
+                    "creative_review": {"status": "passed", "stage": "creative_review"},
+                    "meme_plan_review": {
+                        "status": "failed",
+                        "stage": "meme_plan_review",
+                        "summary": "Deterministic meme text validation failed.",
+                    },
+                    "visual_prompt_review": {"status": "passed", "stage": "visual_prompt_review"},
+                }
+            )
 
     def test_visual_prompt_validation_rejects_missing_anchor_and_character(self):
         report = deterministic_visual_prompt_report(
@@ -253,6 +286,62 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertNotIn("For ALL topics", combined)
         self.assertIn("calm-bright", combined)
         self.assertIn("brightness <= 0.92", combined)
+        self.assertIn("format_archetype", candidate_prompt)
+        self.assertIn("why_this_row_fits", candidate_prompt)
+        self.assertIn("medical_fit", candidate_prompt)
+
+    def test_local_trend_library_loads_as_trend_research_compatible(self):
+        library, path, load_error = _load_trend_library()
+
+        self.assertTrue(path.name.endswith("trend_library.json"))
+        self.assertEqual(load_error, "")
+
+        selected = _select_trends_from_library(
+            library,
+            topic="Acetaminophen dosing",
+            scripts={"english": {"body": ["Dose by weight, not age."]}},
+            visual_brief={"content_type": "medication_dosing"},
+            campaign_profile={},
+        )
+
+        self.assertEqual(set(selected), {"english", "korean", "spanish"})
+        for lang, items in selected.items():
+            self.assertGreaterEqual(len(items), 3, lang)
+            self.assertTrue(all(item["medical_fit"] != "avoid" for item in items))
+            self.assertTrue(all(item["format_archetype"] for item in items))
+            self.assertTrue(all(item["why_this_row_fits"] for item in items))
+
+    def test_trend_scorer_penalizes_unsafe_or_irrelevant_formats(self):
+        safe = {
+            "format_archetype": "decision_tree",
+            "medical_fit": "safe",
+            "caption_density": "medium",
+            "example_topics": ["fever_triage"],
+            "avoid_when": [],
+            "confidence": 0.8,
+        }
+        unsafe = {
+            "format_archetype": "rage_bait_hot_take",
+            "medical_fit": "avoid",
+            "caption_density": "high",
+            "example_topics": [],
+            "avoid_when": ["pediatric health"],
+            "confidence": 0.8,
+        }
+
+        safe_score = _score_trend_item(safe, topic_text="pediatric health fever", content_type="fever_triage")
+        unsafe_score = _score_trend_item(unsafe, topic_text="pediatric health fever", content_type="fever_triage")
+
+        self.assertGreater(safe_score, unsafe_score)
+        self.assertLess(unsafe_score, 0)
+
+    def test_trend_library_falls_back_when_configured_file_is_invalid(self):
+        with patch.dict("os.environ", {"MODOC_TREND_LIBRARY": "/tmp/modoc-missing-trends.json"}):
+            library, path, load_error = _load_trend_library()
+
+        self.assertEqual(library["version"], "fallback")
+        self.assertIn("modoc-missing-trends", str(path))
+        self.assertTrue(load_error)
 
     def test_audio_coverage_helpers_fail_when_required_outputs_are_missing(self):
         plan = {
@@ -348,6 +437,68 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertEqual(invalid_status["status"], "failed")
         self.assertEqual(invalid_json["status"], "failed")
 
+    def test_image_generation_continues_on_qa_failure_by_default(self):
+        plan = {
+            "english": {
+                "visual_style_anchor": "clean illustration",
+                "character_sheet": "stable caregiver",
+                "scenes": [{"scene_id": "scene_01", "image_prompt": "caregiver offers water"}],
+            }
+        }
+
+        def fake_generate(**kwargs):
+            kwargs["output_path"].write_bytes(b"png")
+
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "modoc_pipeline.imagen_client._generate_scene_image",
+            side_effect=fake_generate,
+        ), patch(
+            "modoc_pipeline.imagen_client._review_scene_image",
+            return_value={"status": "failed", "issues": ["missing prop"], "repair_instruction": "fix prop"},
+        ):
+            result = generate_meme_images(
+                meme_plan=plan,
+                output_dir=Path(tmp),
+                config=ImagenConfig(api_key="unused", model="image-model", max_regenerations=0),
+                languages={"english"},
+                sleep_between_requests=0,
+            )
+
+        self.assertIn("scene_01", result["english"])
+
+    def test_image_generation_can_fail_closed_on_qa_failure(self):
+        plan = {
+            "english": {
+                "visual_style_anchor": "clean illustration",
+                "character_sheet": "stable caregiver",
+                "scenes": [{"scene_id": "scene_01", "image_prompt": "caregiver offers water"}],
+            }
+        }
+
+        def fake_generate(**kwargs):
+            kwargs["output_path"].write_bytes(b"png")
+
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "modoc_pipeline.imagen_client._generate_scene_image",
+            side_effect=fake_generate,
+        ), patch(
+            "modoc_pipeline.imagen_client._review_scene_image",
+            return_value={"status": "failed", "issues": ["missing prop"], "repair_instruction": "fix prop"},
+        ):
+            with self.assertRaises(Exception):
+                generate_meme_images(
+                    meme_plan=plan,
+                    output_dir=Path(tmp),
+                    config=ImagenConfig(
+                        api_key="unused",
+                        model="image-model",
+                        image_qa_fail_closed=True,
+                        max_regenerations=0,
+                    ),
+                    languages={"english"},
+                    sleep_between_requests=0,
+                )
+
     def test_visual_prompt_validation_rejects_repetitive_scene_plans(self):
         scenes = []
         for index, role in enumerate(("hook", "tension", "insight", "relief"), start=1):
@@ -429,6 +580,93 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertIn("generic filler", joined)
         self.assertIn("visual_brief.allowed_props", joined)
 
+    def test_medication_visual_brief_removes_sensitive_props(self):
+        brief = _merge_visual_grammar(
+            {
+                "content_type": "medication_dosing",
+                "allowed_props": ["unlabeled medicine bottle", "oral syringe without numbers", "blank dosing note"],
+                "forbidden_visuals": [],
+                "must_show": ["caregiver holding an oral syringe", "blank dosing note on counter"],
+                "must_not_show": [],
+            }
+        )
+
+        joined_allowed = " ".join(brief["allowed_props"]).lower()
+        joined_must_show = " ".join(brief["must_show"]).lower()
+        joined_forbidden = " ".join(brief["forbidden_visuals"]).lower()
+
+        self.assertNotIn("syringe", joined_allowed)
+        self.assertNotIn("medicine bottle", joined_allowed)
+        self.assertNotIn("syringe", joined_must_show)
+        self.assertIn("syringe", joined_forbidden)
+        self.assertIn("medicine bottle", joined_forbidden)
+
+    def test_plan_guardrail_repair_replaces_sensitive_medication_visuals(self):
+        plan = {
+            "visual_brief": {
+                "content_type": "medication_dosing",
+                "allowed_props": ["blank dosing note", "phone with blank screen", "water cup"],
+                "forbidden_visuals": [],
+            },
+            "english": {
+                "bgm_prompt": "Bright pop instrumental, no vocals",
+                "scenes": [
+                    {
+                        "scene_id": "scene_01",
+                        "caption_role": "hook",
+                        "top_text": "Dose",
+                        "bottom_text": "Check weight",
+                        "primary_prop": "oral syringe without numbers",
+                        "safe_props": ["unlabeled medicine bottle", "oral syringe without numbers"],
+                        "tts_text": "Check weight first.",
+                        "image_prompt": "Caregiver drawing liquid medicine into an oral syringe from an unlabeled medicine bottle.",
+                    }
+                ],
+            },
+        }
+
+        repaired = _repair_plan_guardrails(plan)
+        scene = repaired["english"]["scenes"][0]
+        joined = " ".join([scene["primary_prop"], " ".join(scene["safe_props"]), scene["image_prompt"]]).lower()
+
+        self.assertIn("blank dosing note", joined)
+        self.assertNotIn("oral syringe", joined)
+        self.assertNotIn("medicine bottle", joined)
+        self.assertNotIn("liquid medicine", joined)
+
+    def test_visual_prompt_validation_rejects_sensitive_medication_imagery(self):
+        report = deterministic_visual_prompt_report(
+            {
+                "visual_brief": {
+                    "content_type": "medication_dosing",
+                    "allowed_props": ["blank dosing note", "phone with blank screen"],
+                    "forbidden_visuals": ["medicine bottle", "oral syringe", "pills"],
+                },
+                "english": {
+                    "visual_style_anchor": "clean illustration",
+                    "character_sheet": "stable caregiver character",
+                    "scenes": [
+                        {
+                            "scene_id": "scene_01",
+                            "caption_role": "hook",
+                            "medical_message": "Dose safely by weight.",
+                            "scene_visual_action": "Caregiver prepares medication.",
+                            "safe_props": ["oral syringe without numbers"],
+                            "shot_type": "tabletop_action",
+                            "primary_prop": "oral syringe without numbers",
+                            "background": "kitchen",
+                            "tts_text": "Check the weight first.",
+                            "image_prompt": "clean illustration. stable caregiver character. Caregiver draws liquid into an oral syringe from a medicine bottle.",
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(report.status, "failed")
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertIn("sensitive medication imagery", joined)
+
     def test_visual_prompt_validation_requires_primary_prop_in_prompt(self):
         anchor = "modern flat illustration"
         character = "stable caregiver character"
@@ -499,6 +737,126 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertEqual(report.status, "failed")
         joined = " ".join(issue.issue for issue in report.issues)
         self.assertIn("emergency-warning", joined)
+
+    def test_visual_prompt_validation_does_not_treat_ear_as_er(self):
+        anchor = "modern flat illustration"
+        character = "stable caregiver character"
+        report = deterministic_visual_prompt_report(
+            {
+                "visual_brief": {
+                    "content_type": "fever_triage",
+                    "allowed_props": ["water cup", "phone", "blank digital thermometer"],
+                    "forbidden_visuals": [],
+                },
+                "english": {
+                    "visual_style_anchor": anchor,
+                    "character_sheet": character,
+                    "scenes": [
+                        {
+                            "scene_id": "scene_02",
+                            "caption_role": "tension",
+                            "medical_message": "A mild fever is common with diagnosed ear infections.",
+                            "scene_visual_action": "Caregiver offers water near a resting child.",
+                            "safe_props": ["water cup"],
+                            "shot_type": "medium_action",
+                            "primary_prop": "water cup",
+                            "background": "living room",
+                            "tts_text": "A mild fever is common with diagnosed ear infections.",
+                            "image_prompt": f"{anchor}. {character}. Caregiver offers a water cup near a resting child under a light blanket.",
+                        }
+                    ],
+                },
+            }
+        )
+
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertNotIn("emergency-warning", joined)
+
+    def test_plan_guardrail_repair_adds_safe_tokens_before_validation(self):
+        anchor = "modern flat illustration"
+        character = "stable caregiver character"
+        plan = {
+            "visual_brief": {
+                "content_type": "fever_triage",
+                "allowed_props": ["blank digital thermometer", "water cup", "phone", "blank note"],
+                "forbidden_visuals": [],
+            },
+            "korean": {
+                "creative_angle": "열 관찰",
+                "trend_rationale": "현실 육아 상황",
+                "caption_style": "korean_jjal",
+                "tts_style": "calm",
+                "bgm_prompt": "Bright bouncy indie-pop with soft claps",
+                "bgm_config": {"density": 0.62, "brightness": 0.9},
+                "visual_style_anchor": anchor,
+                "character_sheet": character,
+                "scenes": [
+                    {"caption_role": "hook"},
+                    {"caption_role": "tension"},
+                    {
+                        "scene_id": "ko_scene_3",
+                        "caption_role": "insight",
+                        "medical_message": "38도 이상 열이 지속되면 검사 고려.",
+                        "scene_visual_action": "Caregiver writes a note.",
+                        "safe_props": ["blank note"],
+                        "shot_type": "tabletop_action",
+                        "primary_prop": "blank note",
+                        "background": "coffee table",
+                        "top_text": "열 체크",
+                        "bottom_text": "해열제로 조절 안 되고 38도 이상 지속될 때 검사해요",
+                        "tts_text": "38도 이상 열이 지속되면 검사해요.",
+                        "image_prompt": f"{anchor}. {character}. Caregiver writes carefully at a coffee table.",
+                    },
+                    {"caption_role": "relief"},
+                ],
+            },
+        }
+
+        repaired = _repair_plan_guardrails(plan)
+
+        self.assertIn("Instrumental", repaired["korean"]["bgm_prompt"])
+        scene = repaired["korean"]["scenes"][2]
+        self.assertLessEqual(len(scene["bottom_text"]), 24)
+        self.assertIn("blank note", scene["image_prompt"])
+        self.assertIn("blank digital thermometer", scene["image_prompt"])
+
+    def test_visual_prompt_validation_allows_negated_text_logo_and_textures(self):
+        anchor = "Clean vector illustration with soft textures"
+        character = "stable caregiver character"
+        report = deterministic_visual_prompt_report(
+            {
+                "visual_brief": {
+                    "content_type": "fever_triage",
+                    "allowed_props": ["blank digital thermometer", "water cup"],
+                    "forbidden_visuals": [],
+                },
+                "english": {
+                    "visual_style_anchor": anchor,
+                    "character_sheet": character,
+                    "scenes": [
+                        {
+                            "scene_id": "scene_01",
+                            "caption_role": "hook",
+                            "medical_message": "Monitor fever calmly.",
+                            "scene_visual_action": "Caregiver holds a blank thermometer.",
+                            "safe_props": ["blank digital thermometer"],
+                            "shot_type": "close_up",
+                            "primary_prop": "blank digital thermometer",
+                            "background": "bedroom",
+                            "tts_text": "Monitor fever calmly.",
+                            "image_prompt": (
+                                f"{anchor}. {character}. Caregiver holds a blank digital thermometer. "
+                                "No text, logos, or warning graphics are present."
+                            ),
+                        }
+                    ],
+                },
+            }
+        )
+
+        joined = " ".join(issue.issue for issue in report.issues)
+        self.assertNotIn("visible text", joined)
+        self.assertNotIn("visible logos", joined)
 
     def test_campaign_profile_override_deep_merges_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -35,6 +35,7 @@ class ImagenConfig:
     model: str
     review_model: str = DEFAULT_IMAGE_REVIEW_MODEL
     image_qa_enabled: bool = True
+    image_qa_fail_closed: bool = False
     max_regenerations: int = 1
 
 
@@ -45,7 +46,14 @@ def load_imagen_config() -> ImagenConfig:
     model = os.getenv("GEMINI_IMAGE_MODEL", DEFAULT_IMAGE_MODEL).strip() or DEFAULT_IMAGE_MODEL
     review_model = os.getenv("GEMINI_IMAGE_REVIEW_MODEL", DEFAULT_IMAGE_REVIEW_MODEL).strip() or DEFAULT_IMAGE_REVIEW_MODEL
     image_qa_enabled = os.getenv("MODOC_IMAGE_QA", "1").strip().lower() not in {"0", "false", "no"}
-    return ImagenConfig(api_key=api_key, model=model, review_model=review_model, image_qa_enabled=image_qa_enabled)
+    image_qa_fail_closed = os.getenv("MODOC_IMAGE_QA_FAIL_CLOSED", "0").strip().lower() in {"1", "true", "yes"}
+    return ImagenConfig(
+        api_key=api_key,
+        model=model,
+        review_model=review_model,
+        image_qa_enabled=image_qa_enabled,
+        image_qa_fail_closed=image_qa_fail_closed,
+    )
 
 
 def generate_meme_images(
@@ -141,10 +149,17 @@ def generate_meme_images(
                                 scene_id,
                                 "; ".join(review.get("issues", [])),
                             )
-                        if review.get("status") == "failed":
+                        if review.get("status") == "failed" and config.image_qa_fail_closed:
                             raise ImagenError(
                                 f"Image QA failed for {lang_key}/{scene_id}: "
                                 f"{'; '.join(review.get('issues', []))}"
+                            )
+                        if review.get("status") == "failed":
+                            log.warning(
+                                "Continuing despite image QA failure for %s/%s: %s",
+                                lang_key,
+                                scene_id,
+                                "; ".join(review.get("issues", [])),
                             )
                 scene_paths[scene_id] = output_path
                 # Lock the first successfully generated scene as the visual reference.
@@ -253,6 +268,7 @@ Return JSON only:
 
 Fail if:
 - the image contains readable text, letters, numbers, labels, logos, charts, or UI;
+- the image shows visible medicine, medication bottles, oral syringes, droppers, measuring spoons, pills, tablets, capsules, needles, or medication preparation;
 - it uses forbidden visuals from the visual brief;
 - it does not clearly match the spoken tts_text;
 - it does not show the scene_visual_action or primary_prop;
@@ -330,7 +346,8 @@ def _build_image_prompt(scene: dict[str, Any], *, visual_style_anchor: str = "",
     no_text_prefix = "ABSOLUTELY NO text, words, letters, or signs in the image. "
     style_suffix = (
         "9:16 vertical. Flat 2D illustration style. "
-        "You may add a few safe setting details that support the scene, but no readable text, labels, logos, dosage numbers, graphic symptoms, or alarming medical props."
+        "You may add a few safe setting details that support the scene, but no readable text, labels, logos, dosage numbers, graphic symptoms, or alarming medical props. "
+        "Do not show visible medicine, medication bottles, oral syringes, droppers, measuring spoons, pills, tablets, capsules, needles, or medication preparation."
     )
     spoken_line_prefix = f'This image must visually match the spoken line: "{tts_text}".' if tts_text else ""
 

@@ -160,9 +160,9 @@ class ContentVisualBrief(BaseModel):
     target_subject: str = ""
     risk_level: Literal["low", "medium", "high"] = "low"
     allowed_props: list[str] = Field(default_factory=list, max_length=8)
-    forbidden_visuals: list[str] = Field(default_factory=list, max_length=12)
+    forbidden_visuals: list[str] = Field(default_factory=list, max_length=24)
     must_show: list[str] = Field(default_factory=list, max_length=6)
-    must_not_show: list[str] = Field(default_factory=list, max_length=8)
+    must_not_show: list[str] = Field(default_factory=list, max_length=16)
     visual_tone: str = ""
 
 
@@ -207,6 +207,19 @@ class TrendFormat(BaseModel):
     audio_mood: str = ""
     why_it_works: str = ""
     avoid: list[str] = Field(default_factory=list)
+    format_archetype: str = ""
+    language: LanguageKey | str = ""
+    platforms: list[str] = Field(default_factory=list)
+    hook_patterns: list[str] = Field(default_factory=list)
+    visual_rhythm: str = ""
+    caption_density: Literal["low", "medium", "high"] | str = ""
+    medical_fit: Literal["safe", "review", "avoid"] | str = ""
+    avoid_when: list[str] = Field(default_factory=list)
+    example_topics: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    why_this_row_fits: str = ""
+    score: float = 0.0
 
 
 class TrendResearch(BaseModel):

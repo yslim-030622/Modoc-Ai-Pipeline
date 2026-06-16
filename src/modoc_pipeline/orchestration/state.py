@@ -49,6 +49,7 @@ class PipelineState(TypedDict, total=False):
     claims: list[dict[str, Any]]
     script_raw_text: str
     trend_research: dict[str, Any]
+    trend_sources: dict[str, Any]
     visual_brief: dict[str, Any]
     creative_candidates: dict[str, Any]
     creative_scores: dict[str, Any]

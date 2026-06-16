@@ -3,9 +3,33 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .orchestration.state import ReviewIssue, ReviewReport
+
+SENSITIVE_MEDICAL_VISUAL_TERMS = (
+    "medicine bottle",
+    "medication bottle",
+    "unlabeled medicine bottle",
+    "liquid medicine",
+    "visible medicine",
+    "oral syringe",
+    "syringe",
+    "dropper",
+    "measuring spoon",
+    "spoon with medicine",
+    "pill",
+    "pills",
+    "tablet",
+    "tablets",
+    "capsule",
+    "capsules",
+    "needle",
+    "injection",
+    "dose cup",
+    "dosing cup",
+)
 
 
 def deterministic_creative_report(
@@ -32,7 +56,7 @@ def deterministic_creative_report(
         if not _has_selected_safe_score(creative_scores, lang):
             issues.append(_issue(subject, "creative_scores must select one candidate with medical_safety >= 4."))
         bgm_prompt = str(lang_plan.get("bgm_prompt", "")).lower()
-        if not _has_any(bgm_prompt, ("instrumental", "no vocals", "no lyrics")):
+        if not _is_voiceover_safe_bgm_prompt(bgm_prompt):
             issues.append(_issue(subject, "BGM prompt should explicitly keep the track instrumental and voiceover-safe."))
         bgm_config = lang_plan.get("bgm_config", {}) if isinstance(lang_plan.get("bgm_config"), dict) else {}
         if serious_topic:
@@ -137,6 +161,8 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
                 shot_types.append(shot_type)
             if primary_prop:
                 primary_props.append(primary_prop)
+                if _sensitive_medical_visual_present(primary_prop):
+                    issues.append(_issue(subject, f"primary_prop uses sensitive medication imagery: {primary_prop}."))
                 if allowed_props and not _prop_matches_allowed(primary_prop, allowed_props):
                     issues.append(_issue(subject, f"primary_prop should come from visual_brief.allowed_props: {primary_prop}."))
                 if primary_prop in {"plant", "potted plant", "coffee mug", "mug", "tea cup"} and not _prop_matches_allowed(primary_prop, allowed_props):
@@ -148,6 +174,8 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
                     issues.append(_issue(subject, f"{field} is required for visual scene planning."))
             safe_props = [str(p).strip().lower() for p in scene.get("safe_props", []) or [] if str(p).strip()]
             for prop in safe_props:
+                if _sensitive_medical_visual_present(prop):
+                    issues.append(_issue(subject, f"safe_props uses sensitive medication imagery: {prop}."))
                 if allowed_props and not _prop_matches_allowed(prop, allowed_props):
                     issues.append(_issue(subject, f"safe_props should come from visual_brief.allowed_props: {prop}."))
             if anchor and not prompt.startswith(anchor[:40]):
@@ -157,6 +185,8 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
             lowered = prompt.lower()
             if primary_prop and primary_prop not in lowered:
                 issues.append(_issue(subject, f"image_prompt must visibly include primary_prop: {primary_prop}."))
+            if _sensitive_medical_visual_present(lowered):
+                issues.append(_issue(subject, "image_prompt uses sensitive medication imagery such as medicine bottles, syringes, pills, droppers, measuring spoons, or medication preparation."))
             semantic_issue = _semantic_visual_mismatch(scene, lowered)
             if semantic_issue:
                 issues.append(_issue(subject, semantic_issue))
@@ -168,7 +198,7 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
                 "realistic face": "image_prompt includes realistic faces.",
             }
             for token, message in forbidden_pairs.items():
-                if token in lowered and "no " + token not in lowered and "zero " + token not in lowered:
+                if _forbidden_visual_token_present(lowered, token):
                     issues.append(_issue(subject, message))
             repetitive_phrases = (
                 "always holding",
@@ -191,13 +221,12 @@ def deterministic_visual_prompt_report(meme_plan: dict[str, Any]) -> ReviewRepor
                 "visible numbers",
                 "leaf symbol",
                 "organs",
-                "pills",
             )
             for phrase in hallucination_prone:
-                if phrase in lowered:
+                if _forbidden_phrase_present(lowered, phrase):
                     issues.append(_issue(subject, f"image_prompt uses hallucination-prone medical infographic imagery: {phrase}."))
             for phrase in forbidden_visuals:
-                if phrase and phrase in lowered:
+                if phrase and _forbidden_phrase_present(lowered, phrase):
                     issues.append(_issue(subject, f"image_prompt conflicts with visual_brief.forbidden_visuals: {phrase}."))
 
         if len(scenes) >= 4:
@@ -254,10 +283,13 @@ def build_meme_plan_quality_reports(
 
 
 def assert_meme_plan_quality(reports: dict[str, Any]) -> None:
+    hard_gate_stages = {"creative_review", "meme_plan_review"}
     failed = [
         report
         for report in reports.values()
-        if isinstance(report, dict) and report.get("status") == "failed"
+        if isinstance(report, dict)
+        and report.get("status") == "failed"
+        and report.get("stage") in hard_gate_stages
     ]
     if failed:
         summary = "; ".join(
@@ -339,16 +371,16 @@ def _semantic_visual_mismatch(scene: dict[str, Any], lowered_prompt: str) -> str
             ("x-ray", "xray", "stethoscope", "folder", "doctor desk", "comparison", "청진", "폐사진", "radiografía", "estetoscopio"),
             "x-ray/stethoscope tts_text needs a visible diagnostic comparison anchor in image_prompt.",
         ),
-        (
-            ("er", "emergency", "urgent", "응급", "urgencias", "unresponsive", "trouble breathing", "breathing", "경련", "호흡"),
-            ("phone", "pediatric", "doctor", "clinic", "warning", "monitoring", "caregiver watching", "breathing", "응급", "소아과", "urgencias", "médico"),
-            "emergency-warning tts_text needs a visible triage or warning-sign anchor, not only routine care.",
-        ),
     )
 
     for triggers, anchors, message in checks:
         if _has_any(tts, triggers) and not _has_any(lowered_prompt, anchors):
             return message
+    if _has_emergency_warning(tts) and not _has_any(
+        lowered_prompt,
+        ("phone", "pediatric", "doctor", "clinic", "warning", "monitoring", "caregiver watching", "breathing", "응급", "소아과", "urgencias", "médico"),
+    ):
+        return "emergency-warning tts_text needs a visible triage or warning-sign anchor, not only routine care."
     return ""
 
 
@@ -399,6 +431,94 @@ def _is_serious_medical_topic(scripts: dict[str, Any], meme_plan: dict[str, Any]
 
 def _has_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle in text for needle in needles)
+
+
+def _sensitive_medical_visual_present(text: str) -> bool:
+    lowered = str(text).lower()
+    for term in SENSITIVE_MEDICAL_VISUAL_TERMS:
+        pattern = rf"\b{re.escape(term)}s?\b" if not term.endswith("s") else rf"\b{re.escape(term)}\b"
+        for match in re.finditer(pattern, lowered):
+            prefix = lowered[max(0, match.start() - 100) : match.start()]
+            if re.search(
+                r"(no|zero|without(?:\s+any)?|free of|do not show|avoid)\s+"
+                r"(?:visible\s+|any\s+)?"
+                r"(?:(?:medicine|medication)\s+related\s+)?"
+                r"(?:(?:medicine|medication)\s+bottles?,\s+|oral\s+syringes?,\s+|syringes?,\s+|droppers?,\s+|measuring\s+spoons?,\s+|pills?,\s+|tablets?,\s+|capsules?,\s+|needles?,\s+|or\s+)*$",
+                prefix,
+            ):
+                continue
+            return True
+    return False
+
+
+def _is_voiceover_safe_bgm_prompt(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "instrumental",
+            "no vocals",
+            "no vocal",
+            "no lyrics",
+            "without vocals",
+            "without lyrics",
+            "lyric-free",
+            "vocal-free",
+            "voiceover-safe",
+            "room for voiceover",
+        ),
+    )
+
+
+def _has_emergency_warning(text: str) -> bool:
+    if _has_any(text, ("emergency", "urgent", "응급", "urgencias", "unresponsive", "trouble breathing", "경련", "호흡")):
+        return True
+    # Match ER as a standalone acronym only. This avoids false positives such as
+    # "ear infection", "fever", "caregiver", or "water".
+    return re.search(r"(?<![a-z])er(?![a-z])", text) is not None
+
+
+def _forbidden_visual_token_present(text: str, token: str) -> bool:
+    if token == "realistic face":
+        return token in text and "no realistic face" not in text and "zero realistic face" not in text
+    pattern = {
+        "text": r"\btexts?\b",
+        "letters": r"\bletters?\b",
+        "sign": r"\bsigns?\b",
+        "logo": r"\blogos?\b",
+    }.get(token, rf"\b{re.escape(token)}\b")
+    for match in re.finditer(pattern, text):
+        prefix = text[max(0, match.start() - 80) : match.start()]
+        if re.search(
+            r"(no|zero|without(?:\s+any)?|free of)\s+"
+            r"(?:visible\s+|readable\s+)?"
+            r"(?:(?:any\s+)?text,\s+|letters,\s+|signs,\s+|logos,\s+|logo,\s+|or\s+)*$",
+            prefix,
+        ):
+            continue
+        if match.end() < len(text) and text[match.end() : match.end() + 5] == "-free":
+            continue
+        return True
+    return False
+
+
+def _forbidden_phrase_present(text: str, phrase: str) -> bool:
+    phrase = phrase.strip().lower()
+    if not phrase:
+        return False
+    if phrase in {"text", "visible text", "readable text"}:
+        return _forbidden_visual_token_present(text, "text")
+    if phrase in {"letter", "letters", "visible letters", "readable letters"}:
+        return _forbidden_visual_token_present(text, "letters")
+    if phrase in {"sign", "signs", "visible signs", "readable signs"}:
+        return _forbidden_visual_token_present(text, "sign")
+    if phrase in {"logo", "logos", "visible logos"}:
+        return _forbidden_visual_token_present(text, "logo")
+    for match in re.finditer(re.escape(phrase), text):
+        prefix = text[max(0, match.start() - 80) : match.start()]
+        if re.search(r"(no|zero|without(?:\s+any)?|free of)\s+(?:visible\s+|readable\s+)?$", prefix):
+            continue
+        return True
+    return False
 
 
 def _word_count(text: str) -> int:
