@@ -1070,7 +1070,7 @@ def _stage4_generate_plan(
     except Exception:
         parsed = _parse_meme_plan(raw_text, topic=topic, candidates=candidates, scores=scores)
     parsed["visual_brief"] = _merge_visual_grammar(parsed.get("visual_brief") or visual_brief)
-    parsed = _repair_plan_guardrails(parsed)
+    parsed = _repair_plan_guardrails(parsed, scripts=scripts)
     return raw_text, parsed
 
 
@@ -1426,9 +1426,14 @@ def _normalize_lang_plan(
     }
 
 
-def _repair_plan_guardrails(plan: dict[str, Any]) -> dict[str, Any]:
+def _repair_plan_guardrails(plan: dict[str, Any], scripts: dict[str, Any] | None = None) -> dict[str, Any]:
     visual_brief = plan.get("visual_brief") if isinstance(plan.get("visual_brief"), dict) else {}
     allowed_props = [str(prop).strip().lower() for prop in visual_brief.get("allowed_props", []) or [] if str(prop).strip()]
+    source_text = json.dumps(scripts or {}, ensure_ascii=False).lower()
+    urgency_allowed = _has_emergency_tts(source_text) or _has_any_token(
+        source_text,
+        ("immediate care", "seek immediate", "즉시", "atención médica inmediata"),
+    )
     for lang in ("english", "korean", "spanish"):
         lang_plan = plan.get(lang)
         if not isinstance(lang_plan, dict):
@@ -1445,8 +1450,41 @@ def _repair_plan_guardrails(plan: dict[str, Any]) -> dict[str, Any]:
             else:
                 scene["top_text"] = _trim_word_display_text(scene.get("top_text"), 6)
                 scene["bottom_text"] = _trim_word_display_text(scene.get("bottom_text"), 8)
+            _repair_scene_text_guardrails(scene, source_text=source_text, urgency_allowed=urgency_allowed)
             _repair_scene_visual_prompt(scene, allowed_props)
     return plan
+
+
+def _repair_scene_text_guardrails(scene: dict[str, Any], *, source_text: str, urgency_allowed: bool) -> None:
+    for field in ("top_text", "bottom_text", "tts_text"):
+        text = str(scene.get(field, "") or "")
+        if not text:
+            continue
+        repaired = text
+        if not urgency_allowed:
+            repaired = re.sub(r"\bemergency room\b", "doctor's office", repaired, flags=re.IGNORECASE)
+            repaired = re.sub(r"\bER\b", "doctor", repaired)
+            repaired = repaired.replace("응급실", "진료실")
+            repaired = re.sub(r"\burgencias\b", "consulta médica", repaired, flags=re.IGNORECASE)
+            repaired = re.sub(r"\bsala de emergencia\b", "consulta médica", repaired, flags=re.IGNORECASE)
+        repaired = _repair_unsupported_remedy_text(repaired, source_text=source_text)
+        scene[field] = repaired
+
+
+def _repair_unsupported_remedy_text(text: str, *, source_text: str) -> str:
+    replacements = (
+        ("호박즙", "수분 섭취"),
+        ("마사지", "소아과 상담"),
+        ("alcohol de romero", "agua en sorbos pequeños"),
+        ("romero", "agua"),
+        ("home remedy", "doctor-guided care"),
+        ("remedio casero", "cuidado indicado por el pediatra"),
+    )
+    repaired = text
+    for term, replacement in replacements:
+        if term in repaired.lower() and term not in source_text:
+            repaired = re.sub(re.escape(term), replacement, repaired, flags=re.IGNORECASE)
+    return repaired
 
 
 def _repair_scene_visual_prompt(scene: dict[str, Any], allowed_props: list[str]) -> None:

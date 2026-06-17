@@ -85,7 +85,11 @@ def deterministic_meme_text_report(
 ) -> ReviewReport:
     issues: list[dict[str, Any]] = []
     source_text = json.dumps(scripts, ensure_ascii=False).lower()
-    urgency_allowed = _has_any(source_text, ("emergency", "er", "응급", "urgencias", "urgent", "urgente"))
+    urgency_allowed = _has_emergency_warning(source_text) or _has_any(
+        source_text,
+        ("immediate care", "seek immediate", "즉시", "atención médica inmediata"),
+    )
+    remedy_terms = ("호박즙", "마사지", "alcohol de romero", "romero", "home remedy", "remedio casero")
     for lang in ("english", "korean", "spanish"):
         lang_plan = meme_plan.get(lang, {}) if isinstance(meme_plan, dict) else {}
         scenes = lang_plan.get("scenes", []) or []
@@ -100,7 +104,10 @@ def deterministic_meme_text_report(
 
             if not urgency_allowed and _has_any(combined, ("emergency room", " er ", "응급실", "urgencias", "sala de emergencia")):
                 issues.append(_issue(subject, "caption/tts adds emergency-room urgency not supported by the script."))
-            if _has_any(combined, ("호박즙", "마사지", "alcohol de romero", "romero", "home remedy", "remedio casero")):
+            unsupported_remedies = [
+                term for term in remedy_terms if term in combined and term not in source_text
+            ]
+            if unsupported_remedies:
                 issues.append(_issue(subject, "caption/tts mentions a remedy or folk treatment that is not supported by the script."))
             if "mamá latina" in combined:
                 issues.append(_issue(subject, "caption uses the stale/stereotyped 'Mamá latina' template. Use a situation-specific Spanish hook instead."))

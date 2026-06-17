@@ -225,6 +225,82 @@ class AgenticOrchestrationTests(unittest.TestCase):
         self.assertIn("emergency", joined)
         self.assertIn("Mamá latina", joined)
 
+    def test_meme_text_review_allows_source_supported_avoidance_language(self):
+        scripts = {
+            "korean": {
+                "body": [
+                    "집에서는 수분을 조금씩 자주 먹이시고, 미온수 마사지나 알코올 마사지는 절대 하지 마세요."
+                ]
+            }
+        }
+        plan = {
+            "korean": {
+                "scenes": [
+                    {
+                        "scene_id": "kor_scene_3",
+                        "top_text": "안전한 홈케어",
+                        "bottom_text": "수분은 자주, 마사지는 금지",
+                        "tts_text": "수분을 조금씩 주고 마사지는 하지 마세요.",
+                    }
+                ]
+            }
+        }
+
+        report = deterministic_meme_text_report(scripts, plan)
+
+        self.assertEqual(report.status, "passed")
+
+    def test_meme_text_review_does_not_treat_er_inside_words_as_urgency_support(self):
+        scripts = {"english": {"body": ["Offer water if fever is present."]}}
+        plan = {
+            "english": {
+                "scenes": [
+                    {
+                        "scene_id": "scene_01",
+                        "top_text": "Fever check",
+                        "bottom_text": "Go to the ER now",
+                        "tts_text": "Use the emergency room now.",
+                    }
+                ]
+            }
+        }
+
+        report = deterministic_meme_text_report(scripts, plan)
+
+        self.assertEqual(report.status, "failed")
+        self.assertIn("emergency-room urgency", " ".join(issue.issue for issue in report.issues))
+
+    def test_repair_plan_guardrails_removes_unsupported_text_gate_terms(self):
+        plan = {
+            "korean": {
+                "scenes": [
+                    {
+                        "scene_id": "ko_scene_1",
+                        "top_text": "응급실?",
+                        "bottom_text": "호박즙 먹고 마사지하면 괜찮죠",
+                        "tts_text": "응급실에서 호박즙과 마사지를 물어보세요.",
+                        "image_prompt": "",
+                    }
+                ]
+            },
+            "spanish": {
+                "scenes": [
+                    {
+                        "scene_id": "es_scene_1",
+                        "top_text": "Mamá",
+                        "bottom_text": "Alcohol de romero",
+                        "tts_text": "Ve a urgencias por remedio casero.",
+                        "image_prompt": "",
+                    }
+                ]
+            },
+        }
+
+        repaired = _repair_plan_guardrails(plan, scripts={"english": {"body": ["Call your doctor."]}})
+        report = deterministic_meme_text_report({"english": {"body": ["Call your doctor."]}}, repaired)
+
+        self.assertEqual(report.status, "passed")
+
     def test_generate_parser_accepts_skip_search(self):
         parser = build_parser()
         args = parser.parse_args(["generate", "24", "--skip-search"])
